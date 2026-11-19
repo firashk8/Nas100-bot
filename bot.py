@@ -74,6 +74,9 @@ class Settings:
     spread_mult: float = 1.5         # skip entries when spread > 1.5x its recent median
     loss_pause_minutes: int = 15     # pause after 2 emergency stops in a row
     signal_tf: int = 5               # aggressive entries on 1- or 5-minute candles
+    # ---- trend mode (STYLE=trend)
+    trend_band: float = 1.0          # noise-area width multiplier
+    trend_lookback: int = 14         # days used to measure normal noise
 
     @classmethod
     def load(cls):
@@ -97,9 +100,11 @@ class Settings:
             spread_mult=float(env("SPREAD_MULT", "1.5")),
             loss_pause_minutes=int(env("LOSS_PAUSE_MINUTES", "15")),
             signal_tf=int(env("AGGR_TIMEFRAME", "5")),
+            trend_band=float(env("TREND_BAND", "1.0")),
+            trend_lookback=int(env("TREND_LOOKBACK", "14")),
         )
-        if s.style == "aggressive" and not env("RISK_PERCENT"):
-            s.risk_percent = 0.2
+        if not env("RISK_PERCENT"):
+            s.risk_percent = default_risk(s.style)
         return s
 
 
@@ -227,6 +232,68 @@ def aggregate(candles, tf):
     if cur:
         out.append(cur)
     return out
+
+
+def default_risk(style):
+    return {"aggressive": 0.2, "trend": 1.0}.get(style, 0.5)
+
+
+def noise_profile(sessions, lookback=14):
+    """sessions: list (oldest->newest) of lists of (open, close) per 5-min bar from 09:30.
+    Returns sigma per bar index = average |close_k / open_day - 1| over the last `lookback` days."""
+    hist = [s for s in sessions if len(s) >= 70][-lookback:]
+    if len(hist) < 5:
+        return None
+    n = min(len(s) for s in hist)
+    return [sum(abs(s[k][1] / s[0][0] - 1) for s in hist) / len(hist) for k in range(n)]
+
+
+def noise_bounds(open_px, prev_close, sigma_k, band):
+    up = max(open_px, prev_close) * (1 + band * sigma_k)
+    lo = min(open_px, prev_close) * (1 - band * sigma_k)
+    return up, lo
+
+
+def trend_decision(pos, close, up, lo, vwap, check_time):
+    """pos: 'buy'/'sell'/None. Returns 'exit', 'buy', 'sell' or None."""
+    if pos == "buy" and close < max(up, vwap):
+        return "exit"
+    if pos == "sell" and close > min(lo, vwap):
+        return "exit"
+    if pos is None and check_time:
+        if close > max(up, vwap):          # breakout AND on the right side of VWAP
+            return "buy"
+        if close < min(lo, vwap):
+            return "sell"
+    return None
+
+
+def fetch_nq_noise(lookback=14):
+    """Download recent Nasdaq-100 futures 5-minute bars (free, Yahoo) to measure normal noise.
+    Returns (sigma list, gap ratio today or None). Percent moves of NQ and the US100 CFD are
+    practically identical, so the profile transfers to USTEC."""
+    import yfinance as yf
+    df = yf.download("NQ=F", interval="5m", period="30d", progress=False, auto_adjust=False)
+    if hasattr(df.columns, "levels"):
+        df.columns = [c[0] for c in df.columns]
+    df.index = df.index.tz_convert("America/New_York")
+    today = now_ny().date()
+    days, closes = {}, {}
+    for ts, r in df.iterrows():
+        if ts.weekday() >= 5:
+            continue
+        hm = ts.strftime("%H:%M")
+        if "09:30" <= hm <= "15:55":
+            days.setdefault(ts.date(), []).append((float(r["Open"]), float(r["Close"])))
+        if hm == "15:55":
+            closes[ts.date()] = float(r["Close"])
+    past = [days[d] for d in sorted(days) if d < today]
+    sigma = noise_profile(past, lookback)
+    gap = None
+    prev = [d for d in sorted(closes) if d < today]
+    if today in days and prev:
+        gap = days[today][0][0] / closes[prev[-1]]
+    return sigma, gap
 
 
 def spread_ok(spread, history, mult):
@@ -457,6 +524,11 @@ class Engine:
     loss_streak: int = 0
     paused_until: datetime = None
     open_trade: dict = None
+    # trend-mode state
+    sigma: list = None
+    gap: float = None
+    trend_pos: str = None
+    trend_levels: dict = field(default_factory=dict)
 
     def say(self, text):
         line = f"{now_ny():%H:%M:%S} {text}"
@@ -533,7 +605,7 @@ class Engine:
             else:
                 self.losses += 1
                 self.loss_streak += 1
-                self.say(f"Emergency stop hit: {pl:.2f}")
+                self.say(f"Trade closed at a loss: {pl:.2f}")
                 if self.loss_streak >= 2:
                     self.paused_until = now_ny() + timedelta(minutes=self.s.loss_pause_minutes)
                     self.say(f"2 stops in a row - pausing {self.s.loss_pause_minutes} min")
@@ -609,12 +681,82 @@ class Engine:
         except Exception:
             pass
 
+    # ---- trend following: noise-area breakout, ride the move, trailing exit
+    def trend_state_now(self):
+        sess = [c for c in self.candles if c.t >= "09:30"]
+        if not sess or not self.sigma:
+            return None
+        bars = aggregate(sess, 5)
+        k = len(bars) - 1
+        if k >= len(self.sigma):
+            return None
+        open_px = bars[0].open
+        prev_close = open_px / self.gap if self.gap else open_px
+        up, lo = noise_bounds(open_px, prev_close, self.sigma[k], self.s.trend_band)
+        vw = vwap_series(bars)[-1]
+        return {"k": k, "close": bars[-1].close, "up": up, "lo": lo, "vwap": vw}
+
+    async def trend_step(self, t: datetime):
+        if not self.candles or int(self.candles[-1].t[3:]) % 5 != 4:
+            return                                    # act on 5-minute closes only
+        st = self.trend_state_now()
+        if st is None:
+            return
+        self.trend_levels = st
+        day = t.date()
+        if self.trend_pos and not self.positions and not self.open_trade:
+            self.trend_pos = None                     # closed by the server-side disaster stop
+        check = (st["k"] + 1) % 6 == 0 and t <= at(day, 14, 31) and not self.halted
+        d = trend_decision(self.trend_pos, st["close"], st["up"], st["lo"], st["vwap"], check)
+        if d == "exit":
+            await self.close_all()
+            self.say(f"Trend over (price back inside noise/VWAP) - position closed")
+            self.trend_pos = None
+            try:
+                self.positions = await self.b.bot_positions()
+            except Exception:
+                pass
+            return
+        if d in ("buy", "sell"):
+            side = d
+            entry = self.ask if side == "buy" else self.bid
+            trail = max(st["up"], st["vwap"]) if side == "buy" else min(st["lo"], st["vwap"])
+            noise_pts = st["up"] - st["lo"]
+            # distance to the disaster stop: never tighter than half the noise area or 20 pts
+            dist = 1.5 * max(abs(entry - trail) + (self.ask - self.bid), noise_pts / 2, 20.0)
+            balance = float(self.info.get("balance", self.start_balance))
+            risk_money = balance * self.s.risk_percent / 100       # compounds with the balance
+            vols = stack_volumes(risk_money, dist, self.spec, 1, self.s.max_lot)
+            if not vols:
+                self.say("Trend signal skipped: account too small for minimum lot")
+                return
+            disaster = entry - dist if side == "buy" else entry + dist
+            try:
+                await self.b.market(side, vols[0], round(disaster, self.digits), None,
+                                    f"NB{t:%d%H%M}T")
+            except Exception as e:
+                self.say(f"order failed: {e}")
+                return
+            self.trades_today += 1
+            self.trend_pos = side
+            self.open_trade = {"balance": balance, "at": now_ny(), "side": side}
+            self.say(f"Breakout {'UP' if side == 'buy' else 'DOWN'}: {side.upper()} {vols[0]} lot "
+                     f"@ {entry:.2f}, riding the trend (exit {'below' if side == 'buy' else 'above'} "
+                     f"{trail:.2f}, max loss {self.s.risk_percent:g}%)")
+            try:
+                self.positions = await self.b.bot_positions()
+            except Exception:
+                pass
+
     # ---- decisions on each closed 1-minute candle
     async def on_candle(self, t: datetime):
         if self.halted:
             return
         if self.s.style == "aggressive":
             await self.aggressive_step(t)
+            return
+        if self.s.style == "trend":
+            await self.trend_step(t)
             return
         day = t.date()
         if not self.orb_done and t >= at(day, 9, 35):
@@ -650,7 +792,24 @@ class Engine:
         e21s = ema_series([c.close for c in self.candles], 21)[-60:]
         vws = vwap_series(self.candles)[-60:]
         aggressive = self.s.style == "aggressive"
-        if aggressive and self.candles:
+        trend = self.s.style == "trend"
+        if trend:
+            L = self.trend_levels or {}
+            inside = L and L["lo"] <= L["close"] <= L["up"]
+            checks = [
+                {"label": "Connected to MT5", "ok": True},
+                {"label": "NY session open", "ok": session},
+                {"label": "Noise profile loaded (14 days)" if self.sigma else "Noise profile not loaded",
+                 "ok": bool(self.sigma)},
+                {"label": (f"Noise area {L['lo']:.0f} – {L['up']:.0f}" if L else "Noise area: waiting for 09:35"),
+                 "ok": bool(L)},
+                {"label": ("Riding trend " + ("UP" if self.trend_pos == "buy" else "DOWN")) if self.trend_pos
+                 else ("Inside noise – no trend yet" if inside or not L else "Breakout – waiting for :00/:30 check"),
+                 "ok": bool(self.trend_pos)},
+                {"label": "Risk limits OK" if not self.halted else f"Halted: {self.halted}",
+                 "ok": not self.halted},
+            ]
+        elif aggressive and self.candles:
             vw_now = vws[-1] if vws else None
             above = vw_now is not None and self.bid > vw_now
             spread = self.ask - self.bid
@@ -676,11 +835,12 @@ class Engine:
             "bid": self.bid, "ask": self.ask,
             "trend": trend,
             "ema9": e9, "ema21": e21,
-            "chart": {"close": closes, "ema9": e9s,
-                      "ema21": [] if self.s.style == "aggressive" else e21s,
-                      "vwap": vws},
+            "chart": {"close": closes, "ema9": [] if trend else e9s,
+                      "ema21": [] if self.s.style in ("aggressive", "trend") else e21s,
+                      "vwap": vws,
+                      "up": (self.trend_levels or {}).get("up"), "lo": (self.trend_levels or {}).get("lo")},
             "style": self.s.style,
-            "checks": checks if aggressive and self.candles else [
+            "checks": checks if (trend or (aggressive and self.candles)) else [
                 {"label": "Connected to MT5", "ok": True},
                 {"label": "NY session open", "ok": session},
                 {"label": f"Trend detected: {trend.upper() if trend else 'none'}", "ok": bool(trend)},
@@ -704,14 +864,15 @@ class Engine:
                 "profit": p.get("profit")} for p in self.positions],
             "today": ({"setups": self.trades_today, "max_setups": self.s.max_trades,
                        "wins": self.wins, "losses": self.losses}
-                      if self.s.style == "aggressive" else
+                      if self.s.style in ("aggressive", "trend") else
                       {"setups": len(self.setups), "max_setups": self.s.max_setups}),
             "log": list(self.log),
         }
 
 
 # ================================================================ jobs
-async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny, tick=1.0):
+async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny, tick=1.0,
+                      noise_fetcher=fetch_nq_noise):
     gh = gh or GitHub()
     t0 = clock()
     day = t0.date()
@@ -723,10 +884,10 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                          "message": msg, "symbol": s.symbol, "checks": [], "positions": [], "log": [msg]})
 
     control = gh.read_control() or {"enabled": True}
-    if control.get("style") in ("standard", "aggressive"):      # mode chosen in the phone app
+    if control.get("style") in ("standard", "aggressive", "trend"):   # mode chosen in the app
         s.style = control["style"]
         if not env("RISK_PERCENT"):
-            s.risk_percent = 0.2 if s.style == "aggressive" else 0.5
+            s.risk_percent = default_risk(s.style)
     if not control.get("enabled", False):
         idle("Bot is stopped. Press START in the app.")
         return
@@ -756,6 +917,13 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                      digits=int(spec.get("digits") or 2))
         eng.info = info
         eng.positions = await b.bot_positions()
+        if s.style == "trend":
+            try:
+                eng.sigma, eng.gap = noise_fetcher(s.trend_lookback)
+                eng.say(f"Noise profile loaded from {s.trend_lookback} days of Nasdaq data")
+            except Exception as e:
+                eng.say(f"Could not load noise profile ({e}) - no trend trades today")
+        gap_checked = False
         eng.say(f"Connected to {info.get('server')} - balance {info.get('balance')} "
                 f"{info.get('currency')} - {s.style} mode")
         gh.write_status(eng.status("RUNNING"))
@@ -769,6 +937,15 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                 try:
                     p = await b.price()
                     closed = eng.on_tick(t, float(p["bid"]), float(p["ask"]))
+                    if (s.style == "trend" and not gap_checked and eng.sigma
+                            and t >= at(day, 9, 37)):
+                        gap_checked = True
+                        try:
+                            _, g = noise_fetcher(s.trend_lookback)
+                            if g:
+                                eng.gap = g
+                        except Exception:
+                            pass
                     if closed is not None:
                         await eng.on_candle(t)
                 except Exception as e:

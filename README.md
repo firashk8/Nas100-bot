@@ -62,6 +62,16 @@ Turn it on with the GitHub variable `STYLE` = `aggressive`. Remove the variable,
 
 ---
 
+## Trend mode (📈 in the app)
+Based on the published "Beat the Market" intraday momentum strategy (Zarattini, Aziz & Barbon), adapted to US100.
+- **Measuring noise:** each morning it downloads the last 14 days of Nasdaq-100 futures prices and measures how far price normally moves from the open at each time of day. That's the **noise area**, shown as dashed lines in the app.
+- **Entries:** at every :00 and :30 from 10:00 to 14:30 New York, if price is **above** the noise area and above VWAP, it **buys**. If it's below both, it **sells**.
+- **Riding the trend:** on every 5-minute close it holds while the trend lasts, and exits when price falls back inside the noise area or crosses VWAP.
+- **Size:** each trade risks `RISK_PERCENT` (default **1%**) of the **current balance**, so the size grows as the account grows. A disaster stop sits on Exness's server.
+- **Real-data test** (5-minute US100, Sep–Nov 2026, with costs): 41 trades, 29% winners, average win +185 pts vs average loss −48 pts, **+832 pts**. It was positive in both halves of the period. A rougher 2-year hourly test was negative, so **demo-test it before trusting it**.
+
+---
+
 ## Setup (all on your phone)
 
 ### 1. Exness demo account
