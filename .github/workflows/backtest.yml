@@ -1,0 +1,30 @@
+name: Backtest (research)
+
+on:
+  push:
+    branches: [research]
+    paths: ["backtest/**", "bot.py", ".github/workflows/backtest.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install yfinance pandas
+      - name: Run backtest on real NQ 1-minute data
+        run: python backtest/backtest.py
+      - name: Save results to the research branch
+        run: |
+          git config user.name "backtest-bot"
+          git config user.email "backtest-bot@users.noreply.github.com"
+          git add results
+          git commit -m "Backtest results" || echo "nothing to commit"
+          git push
