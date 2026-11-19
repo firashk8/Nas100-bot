@@ -88,6 +88,10 @@ class Settings:
     position_tp_points: float = 10.0 # profit target of EACH position (on the Exness server)
     stack_breakeven: bool = True     # after the first position wins, move the others' stop to entry
     stack_tp_step: float = 3.0       # targets step up: +10, +13, +16 ... so positions close one by one
+    fast_entry: bool = True          # enter instantly on a fast burst in the trend direction
+    burst_k: float = 0.6             # burst = price moved >= 0.6 x average 1-min range within 10 s
+    adaptive_targets: bool = True    # targets follow market speed (ATR) instead of fixed points
+    streaming: bool = True           # live price stream from MetaApi (falls back to polling)
     stack_trend_filter: bool = True  # only open baskets when price is outside the noise area
 
     @classmethod
@@ -124,6 +128,10 @@ class Settings:
             position_tp_points=float(env("POSITION_TP_POINTS", "10")),
             stack_breakeven=env("STACK_BREAKEVEN", "true").lower() == "true",
             stack_tp_step=float(env("STACK_TP_STEP", "3")),
+            fast_entry=env("FAST_ENTRY", "true").lower() == "true",
+            burst_k=float(env("BURST_K", "0.6")),
+            adaptive_targets=env("ADAPTIVE_TARGETS", "true").lower() == "true",
+            streaming=env("PRICE_STREAMING", "true").lower() == "true",
             stack_trend_filter=env("STACK_TREND_FILTER", "true").lower() == "true",
         )
         if not env("RISK_PERCENT"):
@@ -279,6 +287,46 @@ def apply_style_defaults(s):
         s.daily_loss_percent = 30.0
     if s.style == "stack" and not env("MAX_LOT"):
         s.max_lot = 50.0
+
+
+def avg_range(candles, n=14):
+    c = candles[-n:]
+    return sum(x.high - x.low for x in c) / len(c) if c else 0.0
+
+
+def adaptive_tp(s, candles):
+    """First target and step between targets, scaled to how fast the market moves right now."""
+    if not s.adaptive_targets or len(candles) < 5:
+        return s.position_tp_points, s.stack_tp_step
+    atr = avg_range(candles)
+    first = min(max(0.8 * atr, 5.0), 40.0)
+    step = min(max(0.25 * atr, 1.0), 10.0)
+    return round(first, 1), round(step, 1)
+
+
+def burst_direction(candles, recent, now_t, bid, k):
+    """Fast move in the trend direction during the last 10 seconds -> 'buy'/'sell'/None."""
+    if len(candles) < 12:
+        return None
+    vw = vwap_series(candles)[-1]
+    if vw is None:
+        return None
+    e9 = ema_series([c.close for c in candles], 9)
+    atr = avg_range(candles)
+    past = None
+    for tt, px in recent:
+        if (now_t - tt).total_seconds() >= 10:
+            past = px
+        else:
+            break
+    if past is None or atr <= 0:
+        return None
+    move = bid - past
+    if e9[-1] > vw and e9[-1] > e9[-2] and bid > e9[-1] and move >= k * atr:
+        return "buy"
+    if e9[-1] < vw and e9[-1] < e9[-2] and bid < e9[-1] and -move >= k * atr:
+        return "sell"
+    return None
 
 
 def stack_count_for(s, win_streak):
@@ -525,10 +573,26 @@ class Broker:
         self.conn = self.account.get_rpc_connection()
         await self.conn.connect()
         await self.conn.wait_synchronized()
+        self.stream, self.fast = None, False
+        if self.s.streaming:
+            try:   # live price stream: prices arrive the instant they change
+                self.stream = self.account.get_streaming_connection()
+                await self.stream.connect()
+                await self.stream.wait_synchronized()
+                await self.stream.subscribe_to_market_data(self.s.symbol)
+                self.fast = True
+            except Exception as e:
+                print(f"(price stream unavailable, polling instead: {e})")
+                self.stream = None
         return self
 
     async def __aexit__(self, *exc):
         try:
+            if getattr(self, "stream", None):
+                try:
+                    await self.stream.close()
+                except Exception:
+                    pass
             if self.conn:
                 await self.conn.close()
         finally:
@@ -542,6 +606,13 @@ class Broker:
         return await self.conn.get_symbol_specification(symbol=self.s.symbol)
 
     async def price(self):
+        if getattr(self, "stream", None):
+            try:
+                p = self.stream.terminal_state.price(self.s.symbol)
+                if p and p.get("bid") and p.get("ask"):
+                    return p
+            except Exception:
+                pass
         return await self.conn.get_symbol_price(symbol=self.s.symbol)
 
     async def bot_positions(self):
@@ -613,6 +684,8 @@ class Engine:
     # stack-mode state
     basket: dict = None
     win_streak: int = 0
+    recent: deque = field(default_factory=lambda: deque(maxlen=400))
+    last_burst: datetime = None
 
     def say(self, text):
         line = f"{now_ny():%H:%M:%S} {text}"
@@ -624,6 +697,7 @@ class Engine:
     def on_tick(self, t: datetime, bid: float, ask: float):
         self.bid, self.ask = bid, ask
         self.spreads.append(ask - bid)
+        self.recent.append((t, bid))
         minute = t.strftime("%H:%M")
         closed = None
         if self.cur is None or self.cur.t != minute:
@@ -719,11 +793,11 @@ class Engine:
             self.last_setup_closed = now_ny()
 
     async def close_all(self):
-        for p in await self.b.bot_positions():
-            try:
-                await self.b.close(p["id"])
-            except Exception as e:
-                self.say(f"close failed {p.get('id')}: {e}")
+        pos = await self.b.bot_positions()
+        res = await asyncio.gather(*[self.b.close(p["id"]) for p in pos], return_exceptions=True)
+        for p, r in zip(pos, res):
+            if isinstance(r, Exception):
+                self.say(f"close failed {p.get('id')}: {r}")
 
     # ---- aggressive scalping: one position at a time, TP/SL live on the broker server
     async def aggressive_step(self, t: datetime):
@@ -838,7 +912,7 @@ class Engine:
                 pass
 
     # ---- stack & compound: many positions, one basket target, checked every second
-    async def stack_step(self, t: datetime):
+    async def stack_step(self, t: datetime, forced_side=None):
         day = t.date()
         if not (at(day, 9, 35) <= t <= at(day, 14, 45)) or self.halted:
             return
@@ -847,9 +921,12 @@ class Engine:
         if self.trades_today >= self.s.max_trades:
             return
         tf = max(1, self.s.stack_tf)
-        if tf > 1 and int(self.candles[-1].t[3:]) % tf != tf - 1:
-            return
-        side = aggressive_signal(aggregate(self.candles, tf))
+        if forced_side:
+            side = forced_side
+        else:
+            if tf > 1 and int(self.candles[-1].t[3:]) % tf != tf - 1:
+                return
+            side = aggressive_signal(aggregate(self.candles, tf))
         if not side:
             return
         if self.s.stack_trend_filter and self.sigma:
@@ -868,36 +945,50 @@ class Engine:
         count = stack_count_for(self.s, self.win_streak)
         per, n, tp_money, sl_money, sl_pts = stack_plan(balance, self.spec, self.s, count)
         per_pos = self.s.stack_exit == "position"
-        legs = []
+        first_tp, tp_step = adaptive_tp(self.s, self.candles)
+        entry = self.ask if side == "buy" else self.bid
+        sl = entry - sl_pts if side == "buy" else entry + sl_pts
+        orders = []
         for i in range(n):
-            entry = self.ask if side == "buy" else self.bid
-            sl = entry - sl_pts if side == "buy" else entry + sl_pts
-            # each position closes by itself on Exness's server as soon as it is +X points in profit
+            # each position closes by itself on Exness's server as soon as it reaches its target
             tp = None
             if per_pos:
-                dist = self.s.position_tp_points + i * self.s.stack_tp_step
+                dist = first_tp + i * tp_step
                 tp = entry + dist if side == "buy" else entry - dist
-            try:
-                await self.b.market(side, per, round(sl, self.digits),
-                                    round(tp, self.digits) if tp else None, f"NB{t:%d%H%M}S{i}")
+            orders.append(self.b.market(side, per, round(sl, self.digits),
+                                        round(tp, self.digits) if tp else None, f"NB{t:%d%H%M%S}S{i}"))
+        results = await asyncio.gather(*orders, return_exceptions=True)   # all sent at once
+        legs = []
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                self.say(f"order {i + 1} failed: {r}")
+            else:
                 legs.append((per, entry))
-            except Exception as e:
-                self.say(f"order {i + 1} failed: {e}")
         if not legs:
             return
         self.trades_today += 1
         self.basket = {"side": side, "legs": legs, "tp": tp_money, "sl": sl_money,
                        "entry": legs[0][1], "be_done": False}
         self.open_trade = {"balance": balance, "at": now_ny(), "side": side}
-        last_tp = self.s.position_tp_points + (len(legs) - 1) * self.s.stack_tp_step
-        target_txt = (f"closes one by one at +{self.s.position_tp_points:g}..+{last_tp:g} pts" if per_pos
+        last_tp = first_tp + (len(legs) - 1) * tp_step
+        target_txt = (f"closes one by one at +{first_tp:g}..+{last_tp:g} pts" if per_pos
                       else f"target +${tp_money:.2f}")
-        self.say(f"Basket #{self.trades_today}: {side.upper()} {len(legs)} x {per} lot "
+        self.say(f"{'⚡ Burst' if forced_side else 'Basket'} #{self.trades_today}: {side.upper()} {len(legs)} x {per} lot "
                  f"(total {per * len(legs):.2f}) | {target_txt} | safety stop -${sl_money:.2f}")
         try:
             self.positions = await self.b.bot_positions()
         except Exception:
             pass
+
+    async def burst_check(self, t: datetime):
+        if not self.s.fast_entry or self.basket or self.positions or self.open_trade:
+            return
+        if self.last_burst and (t - self.last_burst).total_seconds() < 60:
+            return
+        side = burst_direction(self.candles, self.recent, t, self.bid, self.s.burst_k)
+        if side:
+            self.last_burst = t
+            await self.stack_step(t, forced_side=side)
 
     async def stack_tick(self):
         if not self.basket:
@@ -1144,6 +1235,7 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                     closed = eng.on_tick(t, float(p["bid"]), float(p["ask"]))
                     if s.style == "stack":
                         await eng.stack_tick()
+                        await eng.burst_check(t)
                     if (s.style in ("trend", "stack") and not gap_checked and eng.sigma
                             and t >= at(day, 9, 37)):
                         gap_checked = True
@@ -1173,7 +1265,7 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                         eng.say("STOP pressed in the app - closing all positions")
                         break
                     gh.write_status(eng.status("RUNNING"))
-                await asyncio.sleep(tick)
+                await asyncio.sleep(0.2 if getattr(b, "fast", False) else tick)
         finally:
             await eng.close_all()
             eng.positions = []

@@ -82,6 +82,11 @@ Based on the published "Beat the Market" intraday momentum strategy (Zarattini, 
 - **Lot size:** each position's lot = balance ÷ 1,000 × `LOT_PER_1000` (default 0.1), so the lot **grows as the balance grows**. At $1,000 that's 8 × 0.1 lot; at $5,000 it's 8 × 0.5 lot.
 - **Exits:** the bot checks the whole basket **every second**. It closes everything at **+`BASKET_TP_PERCENT`%** of the balance (default 1.5%), or at **−`BASKET_SL_PERCENT`%** (default 10%). Each position also has a matching stop on Exness's server.
 - **Limits:** the daily loss limit for this mode defaults to 30%. You can change everything with GitHub variables: `STACK_COUNT`, `LOT_PER_1000`, `BASKET_TP_PERCENT`, `BASKET_SL_PERCENT`, `STACK_TIMEFRAME`, `DAILY_LOSS_PERCENT`.
+- **Speed and adaptation (on by default):**
+  - **Live price stream** from MetaApi instead of polling once a second (`PRICE_STREAMING`).
+  - **All positions of a basket sent at the same moment,** and closed the same way.
+  - **⚡ Burst entries:** when price jumps ≥ 0.6 × the average 1-minute range within 10 seconds, in the trend direction, it enters immediately without waiting for the candle to close (`FAST_ENTRY`, `BURST_K`).
+  - **Adaptive targets:** the first target ≈ 0.8 × the current average 1-minute range (5–40 pts), and the step ≈ 0.25 × it, so targets are bigger in fast markets and smaller in calm ones (`ADAPTIVE_TARGETS`).
 - **Ultra (no limits):** set the variable `STACK_PRESET` = `ultra`. It sets 0.5 lot per position for each $1,000, a 30% basket safety stop, **no daily loss limit**, no pause after losses, no trend filter, and up to 500 baskets a day. Any variable you set yourself still overrides it.
 - **Real accounts:** still blocked unless `ALLOW_REAL_ACCOUNT=true`.
 
