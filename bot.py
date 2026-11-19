@@ -92,6 +92,11 @@ class Settings:
     burst_k: float = 0.6             # burst = price moved >= 0.6 x average 1-min range within 10 s
     adaptive_targets: bool = True    # targets follow market speed (ATR) instead of fixed points
     streaming: bool = True           # live price stream from MetaApi (falls back to polling)
+    # ---- intelligence
+    regime_filter: bool = True       # trend / mixed / chop detection (efficiency ratio)
+    mtf_confirm: bool = True         # 5-min and 15-min trends must agree with the entry
+    self_learning: bool = True       # skip conditions that keep losing (learned from own results)
+    trailing_lock: bool = True       # after breakeven, trail the stop behind the best price
     stack_trend_filter: bool = True  # only open baskets when price is outside the noise area
 
     @classmethod
@@ -132,6 +137,10 @@ class Settings:
             burst_k=float(env("BURST_K", "0.6")),
             adaptive_targets=env("ADAPTIVE_TARGETS", "true").lower() == "true",
             streaming=env("PRICE_STREAMING", "true").lower() == "true",
+            regime_filter=env("REGIME_FILTER", "true").lower() == "true",
+            mtf_confirm=env("MTF_CONFIRM", "true").lower() == "true",
+            self_learning=env("SELF_LEARNING", "true").lower() == "true",
+            trailing_lock=env("TRAILING_LOCK", "true").lower() == "true",
             stack_trend_filter=env("STACK_TREND_FILTER", "true").lower() == "true",
         )
         if not env("RISK_PERCENT"):
@@ -287,6 +296,49 @@ def apply_style_defaults(s):
         s.daily_loss_percent = 30.0
     if s.style == "stack" and not env("MAX_LOT"):
         s.max_lot = 50.0
+
+
+def efficiency_ratio(candles, n=20):
+    """1.0 = price moved in a straight line (clean trend), ~0 = went nowhere (chop)."""
+    c = [x.close for x in candles[-(n + 1):]]
+    if len(c) < 6:
+        return None
+    path = sum(abs(c[i] - c[i - 1]) for i in range(1, len(c)))
+    return abs(c[-1] - c[0]) / path if path > 0 else 0.0
+
+
+def market_regime(candles):
+    er = efficiency_ratio(candles)
+    if er is None:
+        return "unknown", None
+    if er >= 0.35:
+        return "trend", er
+    if er < 0.18:
+        return "chop", er
+    return "mixed", er
+
+
+def tf_trend(candles, tf):
+    """'up' / 'down' / None for a higher timeframe built from 1-minute candles."""
+    agg = aggregate([c for c in candles if c.t >= "08:30"], tf)
+    if len(agg) < 3:
+        return None
+    e = ema_series([c.close for c in agg], 9)
+    if agg[-1].close > e[-1] and e[-1] >= e[-2]:
+        return "up"
+    if agg[-1].close < e[-1] and e[-1] <= e[-2]:
+        return "down"
+    return None
+
+
+def learn_key(t, regime):
+    return f"{t.hour:02d}:{0 if t.minute < 30 else 30:02d}|{regime}"
+
+
+def learned_block(stats, key, min_n=8):
+    """True if this time-slot/regime has enough history and loses money overall."""
+    st = (stats or {}).get(key)
+    return bool(st and st.get("n", 0) >= min_n and st.get("pnl", 0) < 0)
 
 
 def avg_range(candles, n=14):
@@ -536,6 +588,34 @@ class GitHub:
                                              "sha": main["object"]["sha"]})
         self.branch_ready = True
 
+    def read_json(self, path):
+        if not self.enabled:
+            return None
+        try:
+            d = self._req("GET", f"/contents/{path}?ref=status")
+            return json.loads(base64.b64decode(d["content"]))
+        except Exception:
+            return None
+
+    def write_json(self, path, obj):
+        if not self.enabled:
+            return
+        try:
+            if not self.branch_ready:
+                self._ensure_branch()
+            sha = None
+            try:
+                sha = self._req("GET", f"/contents/{path}?ref=status")["sha"]
+            except urllib.error.HTTPError:
+                pass
+            body = {"message": f"update {path}", "branch": "status",
+                    "content": base64.b64encode(json.dumps(obj).encode()).decode()}
+            if sha:
+                body["sha"] = sha
+            self._req("PUT", f"/contents/{path}", body)
+        except Exception as e:
+            print(f"({path} write failed: {e})")
+
     def write_status(self, status: dict):
         if not self.enabled:
             return
@@ -686,6 +766,12 @@ class Engine:
     win_streak: int = 0
     recent: deque = field(default_factory=lambda: deque(maxlen=400))
     last_burst: datetime = None
+    regime: str = "unknown"
+    er: float = None
+    mtf: dict = field(default_factory=dict)
+    stats: dict = field(default_factory=dict)
+    stats_dirty: bool = False
+    last_trail: datetime = None
 
     def say(self, text):
         line = f"{now_ny():%H:%M:%S} {text}"
@@ -759,6 +845,7 @@ class Engine:
         if self.open_trade and not self.positions and \
                 (now_ny() - self.open_trade["at"]).total_seconds() >= 10:
             pl = float(self.info.get("balance", 0)) - self.open_trade["balance"]
+            self.record_result(pl)
             if pl >= 0:
                 self.wins += 1
                 self.win_streak += 1
@@ -937,12 +1024,17 @@ class Engine:
                      (side == "sell" and st["close"] < min(st["lo"], st["vwap"]))
                 if not ok:
                     return                      # market still inside its normal noise: no basket
+        allowed, cap, why = self.gate(side, t)
+        if not allowed:
+            return
         spread = self.ask - self.bid
         if not spread_ok(spread, list(self.spreads), self.s.spread_mult):
             self.say(f"{side.upper()} signal skipped - spread {spread:.1f} pts too wide")
             return
         balance = float(self.info.get("balance", self.start_balance))
         count = stack_count_for(self.s, self.win_streak)
+        if cap:
+            count = min(count, cap)
         per, n, tp_money, sl_money, sl_pts = stack_plan(balance, self.spec, self.s, count)
         per_pos = self.s.stack_exit == "position"
         first_tp, tp_step = adaptive_tp(self.s, self.candles)
@@ -969,7 +1061,8 @@ class Engine:
         self.trades_today += 1
         self.basket = {"side": side, "legs": legs, "tp": tp_money, "sl": sl_money,
                        "entry": legs[0][1], "be_done": False}
-        self.open_trade = {"balance": balance, "at": now_ny(), "side": side}
+        self.open_trade = {"balance": balance, "at": now_ny(), "side": side,
+                           "key": learn_key(t, self.regime)}
         last_tp = first_tp + (len(legs) - 1) * tp_step
         target_txt = (f"closes one by one at +{first_tp:g}..+{last_tp:g} pts" if per_pos
                       else f"target +${tp_money:.2f}")
@@ -979,6 +1072,25 @@ class Engine:
             self.positions = await self.b.bot_positions()
         except Exception:
             pass
+
+    async def trail_basket(self):
+        """Move the remaining positions' stop behind the best price (at most every 5 s)."""
+        bk = self.basket
+        buy = bk["side"] == "buy"
+        px = self.bid if buy else self.ask
+        bk["best"] = max(bk.get("best", px), px) if buy else min(bk.get("best", px), px)
+        now = now_ny()
+        if self.last_trail and (now - self.last_trail).total_seconds() < 5:
+            return
+        gap = max(adaptive_tp(self.s, self.candles)[0], 5.0)       # keep one target of room
+        new_sl = bk["best"] - gap if buy else bk["best"] + gap
+        cur = bk.get("trail_sl", bk["entry"])
+        if (buy and new_sl > cur + 1) or (not buy and new_sl < cur - 1):
+            self.last_trail = now
+            res = await asyncio.gather(*[self.b.modify(p["id"], round(new_sl, self.digits), p.get("takeProfit"))
+                                         for p in self.positions], return_exceptions=True)
+            if not any(isinstance(r, Exception) for r in res):
+                bk["trail_sl"] = new_sl
 
     async def burst_check(self, t: datetime):
         if not self.s.fast_entry or self.basket or self.positions or self.open_trade:
@@ -1009,7 +1121,10 @@ class Engine:
                     except Exception as e:
                         self.say(f"breakeven move failed: {e}")
                 self.basket["be_done"] = True
+                self.basket["best"] = self.bid if self.basket["side"] == "buy" else self.ask
                 self.say("First position won - remaining positions locked at breakeven")
+            elif self.s.trailing_lock and self.basket.get("be_done") and self.positions:
+                await self.trail_basket()
         else:
             contract = float(self.spec.get("contractSize") or 1.0)
             pnl = basket_pnl(self.basket, self.bid, self.ask, contract)
@@ -1024,8 +1139,43 @@ class Engine:
             except Exception:
                 pass
 
+    def analyse(self):
+        """Heavier analysis, once per closed candle; the per-second loop only reads the cache."""
+        self.regime, self.er = market_regime(self.candles)
+        self.mtf = {"5m": tf_trend(self.candles, 5), "15m": tf_trend(self.candles, 15)}
+
+    def gate(self, side, t):
+        """Intelligence checks before a basket. Returns (allowed, basket-count cap, reason)."""
+        cap = None
+        if self.s.regime_filter:
+            if self.regime == "chop":
+                return False, None, "market choppy"
+            if self.regime == "mixed":
+                cap = stack_count_for(self.s, 0)            # smallest basket only
+        if self.s.mtf_confirm:
+            want = "up" if side == "buy" else "down"
+            for tf in ("5m", "15m"):
+                if self.mtf.get(tf) and self.mtf[tf] != want:
+                    return False, None, f"{tf} trend disagrees"
+        if self.s.self_learning and learned_block(self.stats, learn_key(t, self.regime)):
+            return False, None, "learned: this time/regime loses"
+        return True, cap, ""
+
+    def record_result(self, pl):
+        if not self.open_trade:
+            return
+        key = self.open_trade.get("key")
+        if not key:
+            return
+        st = self.stats.setdefault(key, {"n": 0, "wins": 0, "pnl": 0.0})
+        st["n"] += 1
+        st["wins"] += 1 if pl >= 0 else 0
+        st["pnl"] = round(st["pnl"] + pl, 2)
+        self.stats_dirty = True
+
     # ---- decisions on each closed 1-minute candle
     async def on_candle(self, t: datetime):
+        self.analyse()
         if self.halted:
             return
         if self.s.style == "aggressive":
@@ -1085,6 +1235,12 @@ class Engine:
                             f"Target +${bk['tp']:.2f} · Stop -${bk['sl']:.2f}") if bk
                            else f"Next basket: {stack_count_for(self.s, self.win_streak)} positions "
                                 f"(streak {self.win_streak})"), "ok": True},
+                {"label": f"Regime: {self.regime.upper()}" + (f" (ER {self.er:.2f})" if self.er is not None else ""),
+                 "ok": self.regime == "trend"},
+                {"label": f"5m {self.mtf.get('5m') or '-'} · 15m {self.mtf.get('15m') or '-'}",
+                 "ok": bool(self.mtf.get("5m")) and self.mtf.get("5m") == self.mtf.get("15m")},
+                {"label": f"Learned from {sum(v.get('n', 0) for v in self.stats.values())} past baskets",
+                 "ok": True},
                 {"label": "Risk limits OK" if not self.halted else f"Halted: {self.halted}",
                  "ok": not self.halted},
             ]
@@ -1220,6 +1376,8 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
             except Exception as e:
                 eng.say(f"Could not load noise profile ({e}) - no trend trades today")
         gap_checked = False
+        if s.self_learning:
+            eng.stats = gh.read_json("learning.json") or {}
         eng.say(f"Connected to {info.get('server')} - balance {info.get('balance')} "
                 f"{info.get('currency')} - {s.style} mode")
         gh.write_status(eng.status("RUNNING"))
@@ -1259,6 +1417,9 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                         print(f"refresh error: {e}")
                 if (t - last_report).total_seconds() >= 30:
                     last_report = t
+                    if eng.stats_dirty:
+                        gh.write_json("learning.json", eng.stats)
+                        eng.stats_dirty = False
                     ctl = gh.read_control()
                     if ctl is not None and not ctl.get("enabled", False):
                         stopped_by_user = True
@@ -1273,6 +1434,8 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                 eng.info = await b.info()
             except Exception:
                 pass
+            if eng.stats_dirty:
+                gh.write_json("learning.json", eng.stats)
             eng.say("Stopped by user" if stopped_by_user else "Session finished - all positions closed")
             gh.write_status(eng.status("STOPPED"))
 

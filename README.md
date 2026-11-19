@@ -87,6 +87,15 @@ Based on the published "Beat the Market" intraday momentum strategy (Zarattini, 
   - **All positions of a basket sent at the same moment,** and closed the same way.
   - **⚡ Burst entries:** when price jumps ≥ 0.6 × the average 1-minute range within 10 seconds, in the trend direction, it enters immediately without waiting for the candle to close (`FAST_ENTRY`, `BURST_K`).
   - **Adaptive targets:** the first target ≈ 0.8 × the current average 1-minute range (5–40 pts), and the step ≈ 0.25 × it, so targets are bigger in fast markets and smaller in calm ones (`ADAPTIVE_TARGETS`).
+- **Intelligence (on by default):**
+  - **Regime detector:** no baskets in chop, smaller baskets in mixed markets (`REGIME_FILTER`).
+  - **5-min and 15-min trend confirmation** (`MTF_CONFIRM`).
+  - **Self-learning:** skips time slots and regimes that have lost money over 8 or more past baskets. The memory is kept in `learning.json` on the status branch (`SELF_LEARNING`).
+  - **Trailing lock** after breakeven (`TRAILING_LOCK`).
+- **Real-data replay** of the actual bot, 20 sessions (23 Oct – 19 Nov 2026):
+  - Stack: $1,000 → **$843**
+  - Ultra: **wiped out in 5 days**
+  - Trend: $1,000 → **$986**
 - **Ultra (no limits):** set the variable `STACK_PRESET` = `ultra`. It sets 0.5 lot per position for each $1,000, a 30% basket safety stop, **no daily loss limit**, no pause after losses, no trend filter, and up to 500 baskets a day. Any variable you set yourself still overrides it.
 - **Real accounts:** still blocked unless `ALLOW_REAL_ACCOUNT=true`.
 
