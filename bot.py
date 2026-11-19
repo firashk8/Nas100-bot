@@ -258,8 +258,23 @@ def aggregate(candles, tf):
     return out
 
 
+ULTRA = {  # STACK_PRESET=ultra : maximum aggression, limits removed (demo lock still applies)
+    "lot_per_1000": 0.5, "basket_sl_percent": 30.0, "daily_loss_percent": 100.0,
+    "max_trades": 500, "max_lot": 100.0, "stack_trend_filter": False, "loss_pause_minutes": 0,
+}
+
+
 def apply_style_defaults(s):
     """Stack mode accepts big swings: give it a wider daily limit unless the user set one."""
+    if s.style == "stack" and (env("STACK_PRESET", "") or "").lower() == "ultra":
+        names = {"lot_per_1000": "LOT_PER_1000", "basket_sl_percent": "BASKET_SL_PERCENT",
+                 "daily_loss_percent": "DAILY_LOSS_PERCENT", "max_trades": "MAX_TRADES",
+                 "max_lot": "MAX_LOT", "stack_trend_filter": "STACK_TREND_FILTER",
+                 "loss_pause_minutes": "LOSS_PAUSE_MINUTES"}
+        for k, v in ULTRA.items():
+            if not env(names[k]):           # a variable you set yourself still wins
+                setattr(s, k, v)
+        return
     if s.style == "stack" and not env("DAILY_LOSS_PERCENT"):
         s.daily_loss_percent = 30.0
     if s.style == "stack" and not env("MAX_LOT"):

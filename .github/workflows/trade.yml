@@ -43,6 +43,18 @@ jobs:
       SPREAD_MULT: ${{ vars.SPREAD_MULT }}
       LOSS_PAUSE_MINUTES: ${{ vars.LOSS_PAUSE_MINUTES }}
       AGGR_TIMEFRAME: ${{ vars.AGGR_TIMEFRAME }}
+      STACK_PRESET: ${{ vars.STACK_PRESET }}
+      STACK_COUNTS: ${{ vars.STACK_COUNTS }}
+      LOT_PER_1000: ${{ vars.LOT_PER_1000 }}
+      POSITION_TP_POINTS: ${{ vars.POSITION_TP_POINTS }}
+      STACK_TP_STEP: ${{ vars.STACK_TP_STEP }}
+      BASKET_SL_PERCENT: ${{ vars.BASKET_SL_PERCENT }}
+      BASKET_TP_PERCENT: ${{ vars.BASKET_TP_PERCENT }}
+      STACK_EXIT: ${{ vars.STACK_EXIT }}
+      STACK_BREAKEVEN: ${{ vars.STACK_BREAKEVEN }}
+      STACK_TREND_FILTER: ${{ vars.STACK_TREND_FILTER }}
+      STACK_TIMEFRAME: ${{ vars.STACK_TIMEFRAME }}
+      TREND_BAND: ${{ vars.TREND_BAND }}
       MODE: ${{ github.event.inputs.mode || 'run' }}
     steps:
       - uses: actions/checkout@v4
