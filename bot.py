@@ -86,6 +86,9 @@ class Settings:
     stack_counts: str = "5,8,10"     # positions per basket: grows after each winning basket
     stack_exit: str = "position"     # "position": each position closes alone at +X pts profit
     position_tp_points: float = 10.0 # profit target of EACH position (on the Exness server)
+    stack_breakeven: bool = True     # after the first position wins, move the others' stop to entry
+    stack_tp_step: float = 3.0       # targets step up: +10, +13, +16 ... so positions close one by one
+    stack_trend_filter: bool = True  # only open baskets when price is outside the noise area
 
     @classmethod
     def load(cls):
@@ -119,6 +122,9 @@ class Settings:
             stack_counts=env("STACK_COUNTS", "5,8,10"),
             stack_exit=env("STACK_EXIT", "position").lower(),
             position_tp_points=float(env("POSITION_TP_POINTS", "10")),
+            stack_breakeven=env("STACK_BREAKEVEN", "true").lower() == "true",
+            stack_tp_step=float(env("STACK_TP_STEP", "3")),
+            stack_trend_filter=env("STACK_TREND_FILTER", "true").lower() == "true",
         )
         if not env("RISK_PERCENT"):
             s.risk_percent = default_risk(s.style)
@@ -831,6 +837,14 @@ class Engine:
         side = aggressive_signal(aggregate(self.candles, tf))
         if not side:
             return
+        if self.s.stack_trend_filter and self.sigma:
+            st = self.trend_state_now()
+            if st:
+                self.trend_levels = st
+                ok = (side == "buy" and st["close"] > max(st["up"], st["vwap"])) or \
+                     (side == "sell" and st["close"] < min(st["lo"], st["vwap"]))
+                if not ok:
+                    return                      # market still inside its normal noise: no basket
         spread = self.ask - self.bid
         if not spread_ok(spread, list(self.spreads), self.s.spread_mult):
             self.say(f"{side.upper()} signal skipped - spread {spread:.1f} pts too wide")
@@ -846,7 +860,8 @@ class Engine:
             # each position closes by itself on Exness's server as soon as it is +X points in profit
             tp = None
             if per_pos:
-                tp = entry + self.s.position_tp_points if side == "buy" else entry - self.s.position_tp_points
+                dist = self.s.position_tp_points + i * self.s.stack_tp_step
+                tp = entry + dist if side == "buy" else entry - dist
             try:
                 await self.b.market(side, per, round(sl, self.digits),
                                     round(tp, self.digits) if tp else None, f"NB{t:%d%H%M}S{i}")
@@ -856,9 +871,11 @@ class Engine:
         if not legs:
             return
         self.trades_today += 1
-        self.basket = {"side": side, "legs": legs, "tp": tp_money, "sl": sl_money}
+        self.basket = {"side": side, "legs": legs, "tp": tp_money, "sl": sl_money,
+                       "entry": legs[0][1], "be_done": False}
         self.open_trade = {"balance": balance, "at": now_ny(), "side": side}
-        target_txt = (f"each closes at +{self.s.position_tp_points:g} pts" if per_pos
+        last_tp = self.s.position_tp_points + (len(legs) - 1) * self.s.stack_tp_step
+        target_txt = (f"closes one by one at +{self.s.position_tp_points:g}..+{last_tp:g} pts" if per_pos
                       else f"target +${tp_money:.2f}")
         self.say(f"Basket #{self.trades_today}: {side.upper()} {len(legs)} x {per} lot "
                  f"(total {per * len(legs):.2f}) | {target_txt} | safety stop -${sl_money:.2f}")
@@ -876,6 +893,17 @@ class Engine:
             self.basket["pnl"] = pnl
             self.basket["open"] = len(self.positions)
             hit = "safety stop" if self.positions and pnl <= -self.basket["sl"] else None
+            if (self.s.stack_breakeven and not self.basket.get("be_done") and self.positions
+                    and len(self.positions) < len(self.basket["legs"])):
+                # at least one position already closed in profit -> lock the rest at entry
+                for p in self.positions:
+                    try:
+                        await self.b.modify(p["id"], round(float(p.get("openPrice") or self.basket["entry"]),
+                                                           self.digits), p.get("takeProfit"))
+                    except Exception as e:
+                        self.say(f"breakeven move failed: {e}")
+                self.basket["be_done"] = True
+                self.say("First position won - remaining positions locked at breakeven")
         else:
             contract = float(self.spec.get("contractSize") or 1.0)
             pnl = basket_pnl(self.basket, self.bid, self.ask, contract)
@@ -1079,7 +1107,7 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                      digits=int(spec.get("digits") or 2))
         eng.info = info
         eng.positions = await b.bot_positions()
-        if s.style == "trend":
+        if s.style == "trend" or (s.style == "stack" and s.stack_trend_filter):
             try:
                 eng.sigma, eng.gap = noise_fetcher(s.trend_lookback)
                 eng.say(f"Noise profile loaded from {s.trend_lookback} days of Nasdaq data")
@@ -1101,7 +1129,7 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                     closed = eng.on_tick(t, float(p["bid"]), float(p["ask"]))
                     if s.style == "stack":
                         await eng.stack_tick()
-                    if (s.style == "trend" and not gap_checked and eng.sigma
+                    if (s.style in ("trend", "stack") and not gap_checked and eng.sigma
                             and t >= at(day, 9, 37)):
                         gap_checked = True
                         try:

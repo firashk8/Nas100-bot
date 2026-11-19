@@ -75,6 +75,10 @@ Based on the published "Beat the Market" intraday momentum strategy (Zarattini, 
 ## Stack mode (🔥 in the app) - high risk
 - **Entries:** on each 1-minute signal (EMA 9 + VWAP trend), it opens a basket of positions in the same direction. The count grows like the video: **5 → 8 → 10** after each winning basket, and goes back to 5 after a loss (`STACK_COUNTS`).
 - **Exits:** each position has its own take-profit on Exness's server (`POSITION_TP_POINTS`, default +10 pts) and closes **by itself, only in profit**. Losing positions are held until they come back into profit. Only the basket safety stop (`BASKET_SL_PERCENT`) closes them at a loss. Set `STACK_EXIT=basket` to use the old close-all-at-+1.5% behaviour instead.
+- **Loss-cutting tricks (on by default):**
+  - **Stepped targets:** +10, +13, +16 … pts, so positions close one by one (`STACK_TP_STEP`).
+  - **Breakeven lock:** as soon as the first position wins, the rest move their stop to the entry price, so that basket can no longer lose (`STACK_BREAKEVEN`).
+  - **Trend filter:** baskets open only when price is outside its normal noise area (`STACK_TREND_FILTER`).
 - **Lot size:** each position's lot = balance ÷ 1,000 × `LOT_PER_1000` (default 0.1), so the lot **grows as the balance grows**. At $1,000 that's 8 × 0.1 lot; at $5,000 it's 8 × 0.5 lot.
 - **Exits:** the bot checks the whole basket **every second**. It closes everything at **+`BASKET_TP_PERCENT`%** of the balance (default 1.5%), or at **−`BASKET_SL_PERCENT`%** (default 10%). Each position also has a matching stop on Exness's server.
 - **Limits:** the daily loss limit for this mode defaults to 30%. You can change everything with GitHub variables: `STACK_COUNT`, `LOT_PER_1000`, `BASKET_TP_PERCENT`, `BASKET_SL_PERCENT`, `STACK_TIMEFRAME`, `DAILY_LOSS_PERCENT`.
