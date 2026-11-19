@@ -19,8 +19,10 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install yfinance pandas
-      - name: Run backtest on real NQ 1-minute data
-        run: python backtest/straddle.py
+      - name: Replay the real bot on real NQ 1-minute data
+        run: |
+          python backtest/replay.py stack
+          python backtest/replay.py ultra
       - name: Save results to the research branch
         run: |
           git config user.name "backtest-bot"
