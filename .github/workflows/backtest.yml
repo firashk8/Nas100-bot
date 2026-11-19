@@ -21,8 +21,7 @@ jobs:
       - run: pip install yfinance pandas
       - name: Replay the real bot on real NQ 1-minute data
         run: |
-          python backtest/replay.py stack
-          python backtest/replay.py ultra
+          python backtest/replay.py trend
       - name: Save results to the research branch
         run: |
           git config user.name "backtest-bot"
