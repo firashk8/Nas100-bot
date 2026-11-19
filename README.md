@@ -72,6 +72,15 @@ Based on the published "Beat the Market" intraday momentum strategy (Zarattini, 
 
 ---
 
+## Stack mode (🔥 in the app) - high risk
+- **Entries:** on each 1-minute signal (EMA 9 + VWAP trend), it opens **8 positions at once** in the same direction.
+- **Lot size:** each position's lot = balance ÷ 1,000 × `LOT_PER_1000` (default 0.1), so the lot **grows as the balance grows**. At $1,000 that's 8 × 0.1 lot; at $5,000 it's 8 × 0.5 lot.
+- **Exits:** the bot checks the whole basket **every second**. It closes everything at **+`BASKET_TP_PERCENT`%** of the balance (default 1.5%), or at **−`BASKET_SL_PERCENT`%** (default 10%). Each position also has a matching stop on Exness's server.
+- **Limits:** the daily loss limit for this mode defaults to 30%. You can change everything with GitHub variables: `STACK_COUNT`, `LOT_PER_1000`, `BASKET_TP_PERCENT`, `BASKET_SL_PERCENT`, `STACK_TIMEFRAME`, `DAILY_LOSS_PERCENT`.
+- **Real accounts:** still blocked unless `ALLOW_REAL_ACCOUNT=true`.
+
+---
+
 ## Setup (all on your phone)
 
 ### 1. Exness demo account

@@ -77,6 +77,12 @@ class Settings:
     # ---- trend mode (STYLE=trend)
     trend_band: float = 1.0          # noise-area width multiplier
     trend_lookback: int = 14         # days used to measure normal noise
+    # ---- stack & compound mode (STYLE=stack)
+    stack_count: int = 8             # positions opened together per signal
+    lot_per_1000: float = 0.1        # lot PER POSITION for every $1,000 of balance (compounds)
+    basket_tp_percent: float = 1.5   # close the whole basket at +X% of balance
+    basket_sl_percent: float = 10.0  # close the whole basket at -X% of balance
+    stack_tf: int = 1                # entries on 1-minute candles
 
     @classmethod
     def load(cls):
@@ -102,9 +108,15 @@ class Settings:
             signal_tf=int(env("AGGR_TIMEFRAME", "5")),
             trend_band=float(env("TREND_BAND", "1.0")),
             trend_lookback=int(env("TREND_LOOKBACK", "14")),
+            stack_count=int(env("STACK_COUNT", "8")),
+            lot_per_1000=float(env("LOT_PER_1000", "0.1")),
+            basket_tp_percent=float(env("BASKET_TP_PERCENT", "1.5")),
+            basket_sl_percent=float(env("BASKET_SL_PERCENT", "10")),
+            stack_tf=int(env("STACK_TIMEFRAME", "1")),
         )
         if not env("RISK_PERCENT"):
             s.risk_percent = default_risk(s.style)
+        apply_style_defaults(s)
         return s
 
 
@@ -232,6 +244,37 @@ def aggregate(candles, tf):
     if cur:
         out.append(cur)
     return out
+
+
+def apply_style_defaults(s):
+    """Stack mode accepts big swings: give it a wider daily limit unless the user set one."""
+    if s.style == "stack" and not env("DAILY_LOSS_PERCENT"):
+        s.daily_loss_percent = 30.0
+    if s.style == "stack" and not env("MAX_LOT"):
+        s.max_lot = 50.0
+
+
+def stack_plan(balance, spec, s):
+    """Per-position volume (compounding with balance), count, and basket money targets."""
+    step = float(spec.get("volumeStep") or 0.01)
+    vmin = float(spec.get("minVolume") or 0.01)
+    per = round_down(balance / 1000.0 * s.lot_per_1000, step)
+    per = max(per, vmin)
+    n = max(1, s.stack_count)
+    while n > 1 and per * n > s.max_lot:
+        n -= 1
+    contract = float(spec.get("contractSize") or 1.0)
+    total = per * n
+    tp_money = balance * s.basket_tp_percent / 100
+    sl_money = balance * s.basket_sl_percent / 100
+    sl_points = sl_money / (total * contract)          # server-side stop distance for each position
+    return per, n, tp_money, sl_money, sl_points
+
+
+def basket_pnl(basket, bid, ask, contract):
+    sign = 1 if basket["side"] == "buy" else -1
+    exit_px = bid if basket["side"] == "buy" else ask
+    return sum(sign * (exit_px - e) * v * contract for v, e in basket["legs"])
 
 
 def default_risk(style):
@@ -529,6 +572,8 @@ class Engine:
     gap: float = None
     trend_pos: str = None
     trend_levels: dict = field(default_factory=dict)
+    # stack-mode state
+    basket: dict = None
 
     def say(self, text):
         line = f"{now_ny():%H:%M:%S} {text}"
@@ -595,6 +640,9 @@ class Engine:
             self.say(f"STOP: {self.halted} - closing everything")
             await self.close_all()
             return
+        if self.basket and self.open_trade and not self.positions and \
+                (now_ny() - self.open_trade["at"]).total_seconds() >= 10:
+            self.basket = None                       # closed by the server-side stops
         if self.open_trade and not self.positions and \
                 (now_ny() - self.open_trade["at"]).total_seconds() >= 10:
             pl = float(self.info.get("balance", 0)) - self.open_trade["balance"]
@@ -748,6 +796,64 @@ class Engine:
             except Exception:
                 pass
 
+    # ---- stack & compound: many positions, one basket target, checked every second
+    async def stack_step(self, t: datetime):
+        day = t.date()
+        if not (at(day, 9, 35) <= t <= at(day, 14, 45)) or self.halted:
+            return
+        if self.positions or self.open_trade or self.basket:
+            return
+        if self.trades_today >= self.s.max_trades:
+            return
+        tf = max(1, self.s.stack_tf)
+        if tf > 1 and int(self.candles[-1].t[3:]) % tf != tf - 1:
+            return
+        side = aggressive_signal(aggregate(self.candles, tf))
+        if not side:
+            return
+        spread = self.ask - self.bid
+        if not spread_ok(spread, list(self.spreads), self.s.spread_mult):
+            self.say(f"{side.upper()} signal skipped - spread {spread:.1f} pts too wide")
+            return
+        balance = float(self.info.get("balance", self.start_balance))
+        per, n, tp_money, sl_money, sl_pts = stack_plan(balance, self.spec, self.s)
+        legs = []
+        for i in range(n):
+            entry = self.ask if side == "buy" else self.bid
+            sl = entry - sl_pts if side == "buy" else entry + sl_pts
+            try:
+                await self.b.market(side, per, round(sl, self.digits), None, f"NB{t:%d%H%M}S{i}")
+                legs.append((per, entry))
+            except Exception as e:
+                self.say(f"order {i + 1} failed: {e}")
+        if not legs:
+            return
+        self.trades_today += 1
+        self.basket = {"side": side, "legs": legs, "tp": tp_money, "sl": sl_money}
+        self.open_trade = {"balance": balance, "at": now_ny(), "side": side}
+        self.say(f"Basket #{self.trades_today}: {side.upper()} {len(legs)} x {per} lot "
+                 f"(total {per * len(legs):.2f}) | target +${tp_money:.2f} | stop -${sl_money:.2f}")
+        try:
+            self.positions = await self.b.bot_positions()
+        except Exception:
+            pass
+
+    async def stack_tick(self):
+        if not self.basket:
+            return
+        contract = float(self.spec.get("contractSize") or 1.0)
+        pnl = basket_pnl(self.basket, self.bid, self.ask, contract)
+        self.basket["pnl"] = pnl
+        hit = "target" if pnl >= self.basket["tp"] else "stop" if pnl <= -self.basket["sl"] else None
+        if hit:
+            await self.close_all()
+            self.say(f"Basket {hit} reached ({pnl:+.2f}) - all positions closed")
+            self.basket = None
+            try:
+                self.positions = await self.b.bot_positions()
+            except Exception:
+                pass
+
     # ---- decisions on each closed 1-minute candle
     async def on_candle(self, t: datetime):
         if self.halted:
@@ -757,6 +863,9 @@ class Engine:
             return
         if self.s.style == "trend":
             await self.trend_step(t)
+            return
+        if self.s.style == "stack":
+            await self.stack_step(t)
             return
         day = t.date()
         if not self.orb_done and t >= at(day, 9, 35):
@@ -793,7 +902,20 @@ class Engine:
         vws = vwap_series(self.candles)[-60:]
         aggressive = self.s.style == "aggressive"
         trend = self.s.style == "trend"
-        if trend:
+        stack = self.s.style == "stack"
+        if stack:
+            bk = self.basket
+            checks = [
+                {"label": "Connected to MT5", "ok": True},
+                {"label": "NY session open", "ok": session},
+                {"label": (f"Basket {bk['side'].upper()} {len(bk['legs'])} positions · P/L {bk.get('pnl', 0):+.2f}"
+                           if bk else "Scanning for entry"), "ok": bool(bk)},
+                {"label": (f"Target +${bk['tp']:.2f} · Stop -${bk['sl']:.2f}" if bk
+                           else f"Next basket: {self.s.stack_count} positions, lot grows with balance"), "ok": True},
+                {"label": "Risk limits OK" if not self.halted else f"Halted: {self.halted}",
+                 "ok": not self.halted},
+            ]
+        elif trend:
             L = self.trend_levels or {}
             inside = L and L["lo"] <= L["close"] <= L["up"]
             checks = [
@@ -836,11 +958,11 @@ class Engine:
             "trend": trend,
             "ema9": e9, "ema21": e21,
             "chart": {"close": closes, "ema9": [] if trend else e9s,
-                      "ema21": [] if self.s.style in ("aggressive", "trend") else e21s,
+                      "ema21": [] if self.s.style in ("aggressive", "trend", "stack") else e21s,
                       "vwap": vws,
                       "up": (self.trend_levels or {}).get("up"), "lo": (self.trend_levels or {}).get("lo")},
             "style": self.s.style,
-            "checks": checks if (trend or (aggressive and self.candles)) else [
+            "checks": checks if (trend or stack or (aggressive and self.candles)) else [
                 {"label": "Connected to MT5", "ok": True},
                 {"label": "NY session open", "ok": session},
                 {"label": f"Trend detected: {trend.upper() if trend else 'none'}", "ok": bool(trend)},
@@ -864,7 +986,7 @@ class Engine:
                 "profit": p.get("profit")} for p in self.positions],
             "today": ({"setups": self.trades_today, "max_setups": self.s.max_trades,
                        "wins": self.wins, "losses": self.losses}
-                      if self.s.style in ("aggressive", "trend") else
+                      if self.s.style in ("aggressive", "trend", "stack") else
                       {"setups": len(self.setups), "max_setups": self.s.max_setups}),
             "log": list(self.log),
         }
@@ -884,10 +1006,11 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                          "message": msg, "symbol": s.symbol, "checks": [], "positions": [], "log": [msg]})
 
     control = gh.read_control() or {"enabled": True}
-    if control.get("style") in ("standard", "aggressive", "trend"):   # mode chosen in the app
+    if control.get("style") in ("standard", "aggressive", "trend", "stack"):   # chosen in the app
         s.style = control["style"]
         if not env("RISK_PERCENT"):
             s.risk_percent = default_risk(s.style)
+        apply_style_defaults(s)
     if not control.get("enabled", False):
         idle("Bot is stopped. Press START in the app.")
         return
@@ -929,7 +1052,7 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
         gh.write_status(eng.status("RUNNING"))
 
         last_refresh = last_report = clock()
-        refresh_every = 5 if s.style == "aggressive" else 30
+        refresh_every = 5 if s.style in ("aggressive", "stack") else 30
         stopped_by_user = False
         try:
             while clock() < hard_end:
@@ -937,6 +1060,8 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                 try:
                     p = await b.price()
                     closed = eng.on_tick(t, float(p["bid"]), float(p["ask"]))
+                    if s.style == "stack":
+                        await eng.stack_tick()
                     if (s.style == "trend" and not gap_checked and eng.sigma
                             and t >= at(day, 9, 37)):
                         gap_checked = True

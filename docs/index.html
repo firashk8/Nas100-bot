@@ -52,11 +52,12 @@
   .pill.wait{background:rgba(232,200,106,.12);color:var(--gold)}
   .row{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
   .btns{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  .seg{display:grid;grid-template-columns:1fr 1fr 1fr;background:#0a0f20;border:1px solid var(--line);border-radius:12px;padding:4px;margin-bottom:14px}
+  .seg{display:grid;grid-template-columns:1fr 1fr;gap:4px;background:#0a0f20;border:1px solid var(--line);border-radius:12px;padding:4px;margin-bottom:14px}
   .seg button{border:0;background:none;color:var(--muted);padding:10px;border-radius:9px;font-weight:700;font-size:14px}
   .seg button.sel{background:#1a2550;color:var(--text)}
   .seg button.sel.aggr{background:rgba(255,138,61,.18);color:#ff8a3d}
   .seg button.sel.trend{background:rgba(46,229,157,.15);color:var(--green)}
+  .seg button.sel.stack{background:rgba(255,61,110,.16);color:var(--red)}
   button.b{border:0;border-radius:12px;padding:15px;font-size:15px;font-weight:800;letter-spacing:.4px;color:#04121a}
   button.start{background:linear-gradient(90deg,#22e3d3,#3dc9ff)}
   button.stopb{background:linear-gradient(90deg,#ff3d6e,#ff5a8a);color:#fff}
@@ -114,7 +115,7 @@
     <h2>⚙ Bot Control</h2>
     <div class="row"><span>Bot status</span><span class="pill stop" id="pill">STOPPED</span></div>
     <div class="row" style="margin-bottom:6px"><span>Trading mode</span><span class="muted" id="modeNote"></span></div>
-    <div class="seg"><button id="mStd">Standard</button><button id="mAgg">⚡ Aggressive</button><button id="mTrd">📈 Trend</button></div>
+    <div class="seg"><button id="mStd">Standard</button><button id="mAgg">⚡ Aggressive</button><button id="mTrd">📈 Trend</button><button id="mStk">🔥 Stack</button></div>
     <div class="btns">
       <button class="b start" id="startBtn">▶ START BOT</button>
       <button class="b stopb" id="stopBtn">■ STOP BOT</button>
@@ -200,7 +201,7 @@ async function setMode(style){
   try {
     await writeControl({style}, "Mode: " + style);
     const live = S && S.state === "RUNNING" && (Date.now() - Date.parse(S.updated))/1000 < 120;
-    toast({aggressive:"Aggressive mode set", trend:"Trend mode set", standard:"Standard mode set"}[style]);
+    toast({aggressive:"Aggressive mode set", trend:"Trend mode set", stack:"Stack mode set", standard:"Standard mode set"}[style]);
     if (live && S.style !== style) toast("Saved – the new mode applies from the next session (or press STOP then START)");
   } catch(e){ toast("Mode change failed: " + e.message); }
   render();
@@ -208,6 +209,7 @@ async function setMode(style){
 $("mStd").onclick = () => setMode("standard");
 $("mAgg").onclick = () => setMode("aggressive");
 $("mTrd").onclick = () => setMode("trend");
+$("mStk").onclick = () => setMode("stack");
 $("startBtn").onclick = async () => {
   if (DEMO) return toast("Demo mode");
   if (!TOKEN) return openSettings();
@@ -263,13 +265,14 @@ function render(){
   else if (controlEnabled) { pill.textContent = "ARMED"; pill.className = "pill wait"; }
   else { pill.textContent = "STOPPED"; pill.className = "pill stop"; }
   $("startBtn").disabled = live; $("stopBtn").disabled = !(live || controlEnabled);
-  if (!$("ctlNote").textContent || live) $("ctlNote").textContent = live ? ({aggressive:"Aggressive scalping · TP/SL on Exness server", trend:"Trend following · rides breakouts"}[S.style] || "Trading NAS100 · NY session")
+  if (!$("ctlNote").textContent || live) $("ctlNote").textContent = live ? ({aggressive:"Aggressive scalping · TP/SL on Exness server", trend:"Trend following · rides breakouts", stack:"Stack & compound · basket target"}[S.style] || "Trading NAS100 · NY session")
       : controlEnabled ? "Armed – trades automatically every weekday 09:15–15:00 New York" : "";
 
   const mode = controlObj.style || S?.style || null;
   $("mStd").className = mode === "standard" ? "sel" : "";
   $("mAgg").className = mode === "aggressive" ? "sel aggr" : "";
   $("mTrd").className = mode === "trend" ? "sel trend" : "";
+  $("mStk").className = mode === "stack" ? "sel stack" : "";
   $("modeNote").textContent = mode ? (S?.style && S.style !== mode && live ? "running: " + S.style : "")
                                    : "set by GitHub variable";
   const a = S?.account || {};
