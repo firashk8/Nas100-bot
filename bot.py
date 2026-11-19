@@ -695,6 +695,10 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                          "message": msg, "symbol": s.symbol, "checks": [], "positions": [], "log": [msg]})
 
     control = gh.read_control() or {"enabled": True}
+    if control.get("style") in ("standard", "aggressive"):      # mode chosen in the phone app
+        s.style = control["style"]
+        if not env("RISK_PERCENT"):
+            s.risk_percent = 0.2 if s.style == "aggressive" else 0.5
     if not control.get("enabled", False):
         idle("Bot is stopped. Press START in the app.")
         return
