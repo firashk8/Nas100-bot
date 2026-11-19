@@ -73,6 +73,7 @@ class Settings:
     max_trades: int = 60             # max aggressive trades per day
     spread_mult: float = 1.5         # skip entries when spread > 1.5x its recent median
     loss_pause_minutes: int = 15     # pause after 2 emergency stops in a row
+    signal_tf: int = 5               # aggressive entries on 1- or 5-minute candles
 
     @classmethod
     def load(cls):
@@ -95,6 +96,7 @@ class Settings:
             max_trades=int(env("MAX_TRADES", "60")),
             spread_mult=float(env("SPREAD_MULT", "1.5")),
             loss_pause_minutes=int(env("LOSS_PAUSE_MINUTES", "15")),
+            signal_tf=int(env("AGGR_TIMEFRAME", "5")),
         )
         if s.style == "aggressive" and not env("RISK_PERCENT"):
             s.risk_percent = 0.2
@@ -203,6 +205,28 @@ def aggressive_signal(candles):
     if cur.close < e9[-1] < vw[-1] and e9[-1] < e9[-2] and cur.close < cur.open:
         return "sell"
     return None
+
+
+def aggregate(candles, tf):
+    """Merge 1-minute candles into tf-minute candles (e.g. 5-minute)."""
+    if tf <= 1:
+        return list(candles)
+    out, cur = [], None
+    for c in candles:
+        hh, mm = map(int, c.t.split(":"))
+        key = f"{hh:02d}:{mm - mm % tf:02d}"
+        if cur is None or cur.t != key:
+            if cur:
+                out.append(cur)
+            cur = Candle(t=key, open=c.open, high=c.high, low=c.low, close=c.close,
+                         ticks=c.ticks, vol=c.vol)
+        else:
+            cur.high, cur.low, cur.close = max(cur.high, c.high), min(cur.low, c.low), c.close
+            cur.ticks += c.ticks
+            cur.vol += c.vol
+    if cur:
+        out.append(cur)
+    return out
 
 
 def spread_ok(spread, history, mult):
@@ -551,7 +575,11 @@ class Engine:
             return
         if self.paused_until and t < self.paused_until:
             return
-        side = aggressive_signal(self.candles)
+        tf = max(1, self.s.signal_tf)
+        last_minute = int(self.candles[-1].t[3:]) if self.candles else 0
+        if tf > 1 and last_minute % tf != tf - 1:
+            return                                  # wait for the 5-minute candle to close
+        side = aggressive_signal(aggregate(self.candles, tf))
         if not side:
             return
         spread = self.ask - self.bid

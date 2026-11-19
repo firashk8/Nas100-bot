@@ -42,6 +42,7 @@ jobs:
       MAX_TRADES: ${{ vars.MAX_TRADES }}
       SPREAD_MULT: ${{ vars.SPREAD_MULT }}
       LOSS_PAUSE_MINUTES: ${{ vars.LOSS_PAUSE_MINUTES }}
+      AGGR_TIMEFRAME: ${{ vars.AGGR_TIMEFRAME }}
       MODE: ${{ github.event.inputs.mode || 'run' }}
     steps:
       - uses: actions/checkout@v4
