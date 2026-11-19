@@ -83,6 +83,9 @@ class Settings:
     basket_tp_percent: float = 1.5   # close the whole basket at +X% of balance
     basket_sl_percent: float = 10.0  # close the whole basket at -X% of balance
     stack_tf: int = 1                # entries on 1-minute candles
+    stack_counts: str = "5,8,10"     # positions per basket: grows after each winning basket
+    stack_exit: str = "position"     # "position": each position closes alone at +X pts profit
+    position_tp_points: float = 10.0 # profit target of EACH position (on the Exness server)
 
     @classmethod
     def load(cls):
@@ -113,6 +116,9 @@ class Settings:
             basket_tp_percent=float(env("BASKET_TP_PERCENT", "1.5")),
             basket_sl_percent=float(env("BASKET_SL_PERCENT", "10")),
             stack_tf=int(env("STACK_TIMEFRAME", "1")),
+            stack_counts=env("STACK_COUNTS", "5,8,10"),
+            stack_exit=env("STACK_EXIT", "position").lower(),
+            position_tp_points=float(env("POSITION_TP_POINTS", "10")),
         )
         if not env("RISK_PERCENT"):
             s.risk_percent = default_risk(s.style)
@@ -254,13 +260,24 @@ def apply_style_defaults(s):
         s.max_lot = 50.0
 
 
-def stack_plan(balance, spec, s):
+def stack_count_for(s, win_streak):
+    """5 -> 8 -> 10 positions as winning baskets follow each other; back to the first after a loss."""
+    try:
+        counts = [int(x) for x in s.stack_counts.split(",") if x.strip()]
+    except ValueError:
+        counts = []
+    if not counts:
+        return max(1, s.stack_count)
+    return counts[min(win_streak, len(counts) - 1)]
+
+
+def stack_plan(balance, spec, s, count=None):
     """Per-position volume (compounding with balance), count, and basket money targets."""
     step = float(spec.get("volumeStep") or 0.01)
     vmin = float(spec.get("minVolume") or 0.01)
     per = round_down(balance / 1000.0 * s.lot_per_1000, step)
     per = max(per, vmin)
-    n = max(1, s.stack_count)
+    n = max(1, count or s.stack_count)
     while n > 1 and per * n > s.max_lot:
         n -= 1
     contract = float(spec.get("contractSize") or 1.0)
@@ -574,6 +591,7 @@ class Engine:
     trend_levels: dict = field(default_factory=dict)
     # stack-mode state
     basket: dict = None
+    win_streak: int = 0
 
     def say(self, text):
         line = f"{now_ny():%H:%M:%S} {text}"
@@ -648,10 +666,12 @@ class Engine:
             pl = float(self.info.get("balance", 0)) - self.open_trade["balance"]
             if pl >= 0:
                 self.wins += 1
+                self.win_streak += 1
                 self.loss_streak = 0
                 self.say(f"Trade closed in profit: +{pl:.2f}")
             else:
                 self.losses += 1
+                self.win_streak = 0
                 self.loss_streak += 1
                 self.say(f"Trade closed at a loss: {pl:.2f}")
                 if self.loss_streak >= 2:
@@ -816,13 +836,20 @@ class Engine:
             self.say(f"{side.upper()} signal skipped - spread {spread:.1f} pts too wide")
             return
         balance = float(self.info.get("balance", self.start_balance))
-        per, n, tp_money, sl_money, sl_pts = stack_plan(balance, self.spec, self.s)
+        count = stack_count_for(self.s, self.win_streak)
+        per, n, tp_money, sl_money, sl_pts = stack_plan(balance, self.spec, self.s, count)
+        per_pos = self.s.stack_exit == "position"
         legs = []
         for i in range(n):
             entry = self.ask if side == "buy" else self.bid
             sl = entry - sl_pts if side == "buy" else entry + sl_pts
+            # each position closes by itself on Exness's server as soon as it is +X points in profit
+            tp = None
+            if per_pos:
+                tp = entry + self.s.position_tp_points if side == "buy" else entry - self.s.position_tp_points
             try:
-                await self.b.market(side, per, round(sl, self.digits), None, f"NB{t:%d%H%M}S{i}")
+                await self.b.market(side, per, round(sl, self.digits),
+                                    round(tp, self.digits) if tp else None, f"NB{t:%d%H%M}S{i}")
                 legs.append((per, entry))
             except Exception as e:
                 self.say(f"order {i + 1} failed: {e}")
@@ -831,8 +858,10 @@ class Engine:
         self.trades_today += 1
         self.basket = {"side": side, "legs": legs, "tp": tp_money, "sl": sl_money}
         self.open_trade = {"balance": balance, "at": now_ny(), "side": side}
+        target_txt = (f"each closes at +{self.s.position_tp_points:g} pts" if per_pos
+                      else f"target +${tp_money:.2f}")
         self.say(f"Basket #{self.trades_today}: {side.upper()} {len(legs)} x {per} lot "
-                 f"(total {per * len(legs):.2f}) | target +${tp_money:.2f} | stop -${sl_money:.2f}")
+                 f"(total {per * len(legs):.2f}) | {target_txt} | safety stop -${sl_money:.2f}")
         try:
             self.positions = await self.b.bot_positions()
         except Exception:
@@ -841,10 +870,17 @@ class Engine:
     async def stack_tick(self):
         if not self.basket:
             return
-        contract = float(self.spec.get("contractSize") or 1.0)
-        pnl = basket_pnl(self.basket, self.bid, self.ask, contract)
-        self.basket["pnl"] = pnl
-        hit = "target" if pnl >= self.basket["tp"] else "stop" if pnl <= -self.basket["sl"] else None
+        if self.s.stack_exit == "position":
+            # winners close themselves on the server; only the safety stop is watched here
+            pnl = sum(float(p.get("profit") or 0) for p in self.positions)
+            self.basket["pnl"] = pnl
+            self.basket["open"] = len(self.positions)
+            hit = "safety stop" if self.positions and pnl <= -self.basket["sl"] else None
+        else:
+            contract = float(self.spec.get("contractSize") or 1.0)
+            pnl = basket_pnl(self.basket, self.bid, self.ask, contract)
+            self.basket["pnl"] = pnl
+            hit = "target" if pnl >= self.basket["tp"] else "stop" if pnl <= -self.basket["sl"] else None
         if hit:
             await self.close_all()
             self.say(f"Basket {hit} reached ({pnl:+.2f}) - all positions closed")
@@ -908,10 +944,13 @@ class Engine:
             checks = [
                 {"label": "Connected to MT5", "ok": True},
                 {"label": "NY session open", "ok": session},
-                {"label": (f"Basket {bk['side'].upper()} {len(bk['legs'])} positions · P/L {bk.get('pnl', 0):+.2f}"
-                           if bk else "Scanning for entry"), "ok": bool(bk)},
-                {"label": (f"Target +${bk['tp']:.2f} · Stop -${bk['sl']:.2f}" if bk
-                           else f"Next basket: {self.s.stack_count} positions, lot grows with balance"), "ok": True},
+                {"label": (f"Basket {bk['side'].upper()} · {bk.get('open', len(bk['legs']))}/{len(bk['legs'])} "
+                           f"open · P/L {bk.get('pnl', 0):+.2f}" if bk else "Scanning for entry"), "ok": bool(bk)},
+                {"label": ((f"Each closes at +{self.s.position_tp_points:g} pts · safety -${bk['sl']:.2f}"
+                            if self.s.stack_exit == "position" else
+                            f"Target +${bk['tp']:.2f} · Stop -${bk['sl']:.2f}") if bk
+                           else f"Next basket: {stack_count_for(self.s, self.win_streak)} positions "
+                                f"(streak {self.win_streak})"), "ok": True},
                 {"label": "Risk limits OK" if not self.halted else f"Halted: {self.halted}",
                  "ok": not self.halted},
             ]
