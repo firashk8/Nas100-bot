@@ -66,10 +66,17 @@ class Settings:
     max_stop_points: float = 60.0    # skip scalps needing a wider stop
     allow_real: bool = False
     run_source: str = "schedule"     # "schedule" or "manual"
+    # ---- aggressive scalping mode (STYLE=aggressive)
+    style: str = "standard"          # "standard" or "aggressive"
+    target_points: float = 5.0       # close at +X points of real profit (after spread)
+    emergency_stop_points: float = 50.0
+    max_trades: int = 60             # max aggressive trades per day
+    spread_mult: float = 1.5         # skip entries when spread > 1.5x its recent median
+    loss_pause_minutes: int = 15     # pause after 2 emergency stops in a row
 
     @classmethod
     def load(cls):
-        return cls(
+        s = cls(
             token=env("METAAPI_TOKEN"),
             account_id=env("METAAPI_ACCOUNT_ID"),
             symbol=env("SYMBOL", "USTEC"),
@@ -82,7 +89,16 @@ class Settings:
             max_stop_points=float(env("MAX_STOP_POINTS", "60")),
             allow_real=env("ALLOW_REAL_ACCOUNT", "false").lower() == "true",
             run_source=env("RUN_SOURCE", "schedule"),
+            style=env("STYLE", "standard").lower(),
+            target_points=float(env("TARGET_POINTS", "5")),
+            emergency_stop_points=float(env("EMERGENCY_STOP_POINTS", "50")),
+            max_trades=int(env("MAX_TRADES", "60")),
+            spread_mult=float(env("SPREAD_MULT", "1.5")),
+            loss_pause_minutes=int(env("LOSS_PAUSE_MINUTES", "15")),
         )
+        if s.style == "aggressive" and not env("RISK_PERCENT"):
+            s.risk_percent = 0.2
+        return s
 
 
 # ================================================================ pure logic
@@ -94,10 +110,13 @@ class Candle:
     low: float = 0.0
     close: float = 0.0
     ticks: int = 0
+    vol: int = 0
 
     def update(self, price):
         if self.ticks == 0:
             self.open = self.high = self.low = price
+        if self.ticks == 0 or price != self.close:
+            self.vol += 1
         self.high = max(self.high, price)
         self.low = min(self.low, price)
         self.close = price
@@ -147,6 +166,58 @@ def scalp_signal(candles):
     if trend == "down" and prev.high >= e9[-2] and cur.close < e9[-1] and cur.close < cur.open:
         return "sell", max(c.high for c in last3)
     return None, None
+
+
+def vwap_series(candles, session_start="09:30"):
+    """Session VWAP from 1-minute candles, weighted by tick volume (CFDs have no real volume).
+    Returns a list aligned with candles (None before the session starts)."""
+    out, pv, vv = [], 0.0, 0.0
+    for c in candles:
+        if c.t < session_start:
+            out.append(None)
+            continue
+        w = max(c.vol, 1)
+        pv += (c.high + c.low + c.close) / 3 * w
+        vv += w
+        out.append(pv / vv)
+    return out
+
+
+def aggressive_signal(candles):
+    """EMA9 + VWAP trend scalp on the last closed 1-minute candle.
+    BUY : close > EMA9 > VWAP, EMA9 rising, green candle, not over-extended.
+    SELL: mirror image. Returns 'buy', 'sell' or None."""
+    if len(candles) < 12:
+        return None
+    vw = vwap_series(candles)
+    if vw[-1] is None or sum(v is not None for v in vw) < 3:
+        return None
+    e9 = ema_series([c.close for c in candles], 9)
+    cur = candles[-1]
+    avg_range = sum(c.high - c.low for c in candles[-10:]) / 10 or 1e-9
+    stretch = abs(cur.close - e9[-1])
+    if stretch > 1.5 * avg_range:
+        return None                      # do not chase a candle that already ran away
+    if cur.close > e9[-1] > vw[-1] and e9[-1] > e9[-2] and cur.close > cur.open:
+        return "buy"
+    if cur.close < e9[-1] < vw[-1] and e9[-1] < e9[-2] and cur.close < cur.open:
+        return "sell"
+    return None
+
+
+def spread_ok(spread, history, mult):
+    if len(history) < 30:
+        return True
+    med = sorted(history)[len(history) // 2]
+    return spread <= max(med * mult, med + 0.5)
+
+
+def aggressive_levels(side, bid, ask, target, stop):
+    """Take-profit sits on the broker's server at +target points of REAL profit:
+    a buy fills at ask and closes at bid, so TP = ask + target already covers the spread."""
+    if side == "buy":
+        return ask, ask + target, ask - stop
+    return bid, bid - target, bid + stop
 
 
 def round_down(x, step):
@@ -354,6 +425,14 @@ class Engine:
     info: dict = field(default_factory=dict)
     positions: list = field(default_factory=list)
     message: str = "Starting"
+    # aggressive-mode state
+    spreads: deque = field(default_factory=lambda: deque(maxlen=300))
+    trades_today: int = 0
+    wins: int = 0
+    losses: int = 0
+    loss_streak: int = 0
+    paused_until: datetime = None
+    open_trade: dict = None
 
     def say(self, text):
         line = f"{now_ny():%H:%M:%S} {text}"
@@ -364,6 +443,7 @@ class Engine:
     # ---- candles
     def on_tick(self, t: datetime, bid: float, ask: float):
         self.bid, self.ask = bid, ask
+        self.spreads.append(ask - bid)
         minute = t.strftime("%H:%M")
         closed = None
         if self.cur is None or self.cur.t != minute:
@@ -419,6 +499,21 @@ class Engine:
             self.say(f"STOP: {self.halted} - closing everything")
             await self.close_all()
             return
+        if self.open_trade and not self.positions and \
+                (now_ny() - self.open_trade["at"]).total_seconds() >= 10:
+            pl = float(self.info.get("balance", 0)) - self.open_trade["balance"]
+            if pl >= 0:
+                self.wins += 1
+                self.loss_streak = 0
+                self.say(f"Trade closed in profit: +{pl:.2f}")
+            else:
+                self.losses += 1
+                self.loss_streak += 1
+                self.say(f"Emergency stop hit: {pl:.2f}")
+                if self.loss_streak >= 2:
+                    self.paused_until = now_ny() + timedelta(minutes=self.s.loss_pause_minutes)
+                    self.say(f"2 stops in a row - pausing {self.s.loss_pause_minutes} min")
+            self.open_trade = None
         open_ids = {}
         for p in self.positions:
             key = str(p.get("clientId") or p.get("comment") or "")
@@ -445,9 +540,53 @@ class Engine:
             except Exception as e:
                 self.say(f"close failed {p.get('id')}: {e}")
 
+    # ---- aggressive scalping: one position at a time, TP/SL live on the broker server
+    async def aggressive_step(self, t: datetime):
+        day = t.date()
+        if not (at(day, 9, 35) <= t <= at(day, 14, 45)):
+            return
+        if self.positions or self.open_trade:
+            return
+        if self.trades_today >= self.s.max_trades:
+            return
+        if self.paused_until and t < self.paused_until:
+            return
+        side = aggressive_signal(self.candles)
+        if not side:
+            return
+        spread = self.ask - self.bid
+        if not spread_ok(spread, list(self.spreads), self.s.spread_mult):
+            self.say(f"{side.upper()} signal skipped - spread {spread:.1f} pts is too wide right now")
+            return
+        entry, tp, sl = aggressive_levels(side, self.bid, self.ask,
+                                          self.s.target_points, self.s.emergency_stop_points)
+        risk_money = self.start_balance * self.s.risk_percent / 100
+        vols = stack_volumes(risk_money, self.s.emergency_stop_points, self.spec, 1, self.s.max_lot)
+        if not vols:
+            self.say("Skipped: account too small for the minimum lot at this risk")
+            return
+        balance = float(self.info.get("balance", self.start_balance))
+        try:
+            await self.b.market(side, vols[0], round(sl, self.digits), round(tp, self.digits),
+                                f"NB{t:%d%H%M}A")
+        except Exception as e:
+            self.say(f"order failed: {e}")
+            return
+        self.trades_today += 1
+        self.open_trade = {"balance": balance, "at": now_ny(), "side": side}
+        self.say(f"#{self.trades_today} {side.upper()} {vols[0]} lot @ {entry:.2f} | "
+                 f"TP {tp:.2f} (+{self.s.target_points:g} pts) | SL {sl:.2f}")
+        try:
+            self.positions = await self.b.bot_positions()
+        except Exception:
+            pass
+
     # ---- decisions on each closed 1-minute candle
     async def on_candle(self, t: datetime):
         if self.halted:
+            return
+        if self.s.style == "aggressive":
+            await self.aggressive_step(t)
             return
         day = t.date()
         if not self.orb_done and t >= at(day, 9, 35):
@@ -481,6 +620,25 @@ class Engine:
         closes = [c.close for c in self.candles[-60:]]
         e9s = ema_series([c.close for c in self.candles], 9)[-60:]
         e21s = ema_series([c.close for c in self.candles], 21)[-60:]
+        vws = vwap_series(self.candles)[-60:]
+        aggressive = self.s.style == "aggressive"
+        if aggressive and self.candles:
+            vw_now = vws[-1] if vws else None
+            above = vw_now is not None and self.bid > vw_now
+            spread = self.ask - self.bid
+            checks = [
+                {"label": "Connected to MT5", "ok": True},
+                {"label": "NY session open", "ok": session},
+                {"label": "VWAP: price " + ("ABOVE (buy side)" if above else "BELOW (sell side)")
+                 if vw_now is not None else "VWAP: waiting for 09:30", "ok": vw_now is not None},
+                {"label": f"Spread {spread:.1f} pts " + ("OK" if spread_ok(spread, list(self.spreads), self.s.spread_mult) else "too wide"),
+                 "ok": spread_ok(spread, list(self.spreads), self.s.spread_mult)},
+                {"label": "In trade - TP/SL on Exness server" if self.positions
+                 else ("Paused after 2 stops" if self.paused_until and now_ny() < self.paused_until
+                       else "Scanning every candle for entry"), "ok": True},
+                {"label": "Risk limits OK" if not self.halted else f"Halted: {self.halted}",
+                 "ok": not self.halted},
+            ]
         equity = float(self.info.get("equity", 0) or 0)
         return {
             "updated": datetime.now(timezone.utc).isoformat(),
@@ -490,8 +648,11 @@ class Engine:
             "bid": self.bid, "ask": self.ask,
             "trend": trend,
             "ema9": e9, "ema21": e21,
-            "chart": {"close": closes, "ema9": e9s, "ema21": e21s},
-            "checks": [
+            "chart": {"close": closes, "ema9": e9s,
+                      "ema21": [] if self.s.style == "aggressive" else e21s,
+                      "vwap": vws},
+            "style": self.s.style,
+            "checks": checks if aggressive and self.candles else [
                 {"label": "Connected to MT5", "ok": True},
                 {"label": "NY session open", "ok": session},
                 {"label": f"Trend detected: {trend.upper() if trend else 'none'}", "ok": bool(trend)},
@@ -513,7 +674,10 @@ class Engine:
                 "volume": p.get("volume"), "open": p.get("openPrice"),
                 "sl": p.get("stopLoss"), "tp": p.get("takeProfit"),
                 "profit": p.get("profit")} for p in self.positions],
-            "today": {"setups": len(self.setups), "max_setups": self.s.max_setups},
+            "today": ({"setups": self.trades_today, "max_setups": self.s.max_trades,
+                       "wins": self.wins, "losses": self.losses}
+                      if self.s.style == "aggressive" else
+                      {"setups": len(self.setups), "max_setups": self.s.max_setups}),
             "log": list(self.log),
         }
 
@@ -561,10 +725,11 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
         eng.info = info
         eng.positions = await b.bot_positions()
         eng.say(f"Connected to {info.get('server')} - balance {info.get('balance')} "
-                f"{info.get('currency')}")
+                f"{info.get('currency')} - {s.style} mode")
         gh.write_status(eng.status("RUNNING"))
 
-        last_refresh = clock()
+        last_refresh = last_report = clock()
+        refresh_every = 5 if s.style == "aggressive" else 30
         stopped_by_user = False
         try:
             while clock() < hard_end:
@@ -576,7 +741,7 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                         await eng.on_candle(t)
                 except Exception as e:
                     print(f"tick error: {e}")
-                if (t - last_refresh).total_seconds() >= 30:
+                if (t - last_refresh).total_seconds() >= refresh_every:
                     last_refresh = t
                     try:
                         eng.info = await b.info()
@@ -584,6 +749,8 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                         await eng.manage()
                     except Exception as e:
                         print(f"refresh error: {e}")
+                if (t - last_report).total_seconds() >= 30:
+                    last_report = t
                     ctl = gh.read_control()
                     if ctl is not None and not ctl.get("enabled", False):
                         stopped_by_user = True

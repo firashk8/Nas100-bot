@@ -36,6 +36,12 @@ jobs:
       MAX_SETUPS: ${{ vars.MAX_SETUPS }}
       MAX_LOT: ${{ vars.MAX_LOT }}
       ALLOW_REAL_ACCOUNT: ${{ vars.ALLOW_REAL_ACCOUNT }}
+      STYLE: ${{ vars.STYLE }}
+      TARGET_POINTS: ${{ vars.TARGET_POINTS }}
+      EMERGENCY_STOP_POINTS: ${{ vars.EMERGENCY_STOP_POINTS }}
+      MAX_TRADES: ${{ vars.MAX_TRADES }}
+      SPREAD_MULT: ${{ vars.SPREAD_MULT }}
+      LOSS_PAUSE_MINUTES: ${{ vars.LOSS_PAUSE_MINUTES }}
       MODE: ${{ github.event.inputs.mode || 'run' }}
     steps:
       - uses: actions/checkout@v4

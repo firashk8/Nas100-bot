@@ -240,7 +240,7 @@ function render(){
   else if (controlEnabled) { pill.textContent = "ARMED"; pill.className = "pill wait"; }
   else { pill.textContent = "STOPPED"; pill.className = "pill stop"; }
   $("startBtn").disabled = live; $("stopBtn").disabled = !(live || controlEnabled);
-  if (!$("ctlNote").textContent || live) $("ctlNote").textContent = live ? "Trading NAS100 · NY session"
+  if (!$("ctlNote").textContent || live) $("ctlNote").textContent = live ? (S.style === "aggressive" ? "Aggressive scalping · TP/SL on Exness server" : "Trading NAS100 · NY session")
       : controlEnabled ? "Armed – trades automatically every weekday 09:15–15:00 New York" : "";
 
   const a = S?.account || {};
@@ -263,7 +263,10 @@ function render(){
       <span></span><span class="muted">SL ${fmt(p.sl)} · TP ${fmt(p.tp)}</span><span></span></div>`).join("")
     : '<div class="muted">No open positions</div>';
   const fl = ps.reduce((s,p)=>s+(p.profit||0),0);
-  $("setups").textContent = S?.today ? `${ps.length} open · ${ps.length ? (fl>=0?'+':'')+fmt(fl)+' · ' : ''}setups ${S.today.setups}/${S.today.max_setups}` : "";
+  const td = S?.today;
+  $("setups").textContent = !td ? "" : (S.style === "aggressive"
+      ? `${ps.length} open · trades ${td.setups}/${td.max_setups} · ✓${td.wins||0} ✗${td.losses||0}`
+      : `${ps.length} open · ${ps.length ? (fl>=0?'+':'')+fmt(fl)+' · ' : ''}setups ${td.setups}/${td.max_setups}`);
   $("log").textContent = (S?.log || []).slice().reverse().join("\n") || "—";
   drawChart();
 }
@@ -275,16 +278,18 @@ function drawChart(){
   ctx.strokeStyle = "#1b2547"; ctx.lineWidth = 1;
   for (let i=1;i<4;i++){ ctx.beginPath(); ctx.moveTo(0,H*i/4); ctx.lineTo(W,H*i/4); ctx.stroke(); }
   if (c.length < 2) { ctx.fillStyle="#7d89b3"; ctx.font="22px system-ui"; ctx.fillText("No market data yet", 20, H/2); return; }
-  const all = c.concat(S.chart.ema9||[], S.chart.ema21||[]).filter(v=>v!=null);
+  const all = c.concat(S.chart.ema9||[], S.chart.ema21||[], S.chart.vwap||[]).filter(v=>v!=null);
   const lo = Math.min(...all), hi = Math.max(...all), pad = (hi-lo)*0.08 || 1;
   const x = i => i*(W-10)/(c.length-1) + 5, y = v => H - ((v-lo+pad)/(hi-lo+2*pad))*H;
   const line = (arr, color, w) => { if(!arr||arr.length<2) return; ctx.beginPath(); ctx.strokeStyle=color; ctx.lineWidth=w;
-    arr.forEach((v,i)=> i? ctx.lineTo(x(i),y(v)) : ctx.moveTo(x(i),y(v))); ctx.stroke(); };
+    let started=false; arr.forEach((v,i)=>{ if(v==null){started=false;return;} if(started) ctx.lineTo(x(i),y(v)); else {ctx.moveTo(x(i),y(v)); started=true;} }); ctx.stroke(); };
   const g = ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,"rgba(232,200,106,.25)"); g.addColorStop(1,"rgba(232,200,106,0)");
   ctx.beginPath(); c.forEach((v,i)=> i? ctx.lineTo(x(i),y(v)) : ctx.moveTo(x(i),y(v)));
   ctx.lineTo(x(c.length-1),H); ctx.lineTo(x(0),H); ctx.fillStyle=g; ctx.fill();
-  line(S.chart.ema21, "#3d7bff", 2); line(S.chart.ema9, "#22e3d3", 2); line(c, "#e8c86a", 3);
-  ctx.font="18px system-ui"; ctx.fillStyle="#22e3d3"; ctx.fillText("EMA 9",10,22); ctx.fillStyle="#3d7bff"; ctx.fillText("EMA 21",80,22);
+  line(S.chart.ema21, "#3d7bff", 2); line(S.chart.vwap, "#ff8a3d", 2); line(S.chart.ema9, "#22e3d3", 2); line(c, "#e8c86a", 3);
+  ctx.font="18px system-ui"; ctx.fillStyle="#22e3d3"; ctx.fillText("EMA 9",10,22);
+  if ((S.chart.ema21||[]).length) { ctx.fillStyle="#3d7bff"; ctx.fillText("EMA 21",80,22); }
+  if ((S.chart.vwap||[]).some(v=>v!=null)) { ctx.fillStyle="#ff8a3d"; ctx.fillText("VWAP",(S.chart.ema21||[]).length?160:80,22); }
 }
 
 /* ---------------- settings ---------------- */

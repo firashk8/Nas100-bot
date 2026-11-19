@@ -33,6 +33,35 @@ You can change these in **Settings → Secrets and variables → Actions → Var
 
 ---
 
+## Aggressive mode (fast scalping)
+Turn it on with the GitHub variable `STYLE` = `aggressive`. Remove the variable, or set it to `standard`, to go back.
+
+**How it trades:**
+- **Scanning:** checks every 1-minute candle from 09:35 to 14:45 New York (15:35–20:45 Tunis, winter time).
+- **BUY:** the candle closes above EMA 9, EMA 9 is above VWAP and rising, and the candle is green. **SELL** is the mirror image.
+- **Exits live on Exness's server:**
+  - The take-profit sits at **+5 points of real profit after the spread**, so Exness closes the trade the instant price touches it, with no delay from the bot.
+  - The **emergency stop** sits 50 points away. Small dips below the entry are ignored.
+- **Repeats:** the bot checks every 5 seconds whether the trade has closed, then looks for the next entry on the next candle.
+- **Skips:** no entry when the spread is wider than normal, or when the candle has already run far from EMA 9.
+
+**Safety:**
+- risk 0.2% per trade (≈ $2 at the emergency stop on $1,000, about 0.04 lot)
+- max 60 trades a day
+- a 15-minute pause after 2 emergency stops in a row
+- the −2% daily limit
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `TARGET_POINTS` | 5 | profit target per trade, in points after the spread |
+| `EMERGENCY_STOP_POINTS` | 50 | emergency stop distance |
+| `RISK_PERCENT` | 0.2 | % of balance lost if the emergency stop is hit |
+| `MAX_TRADES` | 60 | trades per day |
+
+**The maths to watch:** a win is about +$0.20 and a stop is about −$2.00, so **one stop cancels about 10 wins**. The bot only makes money if it wins **more than about 91%** of trades. Check the ✓/✗ counter in the app every day of the demo test.
+
+---
+
 ## Setup (all on your phone)
 
 ### 1. Exness demo account
