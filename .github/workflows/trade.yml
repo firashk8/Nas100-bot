@@ -1,0 +1,52 @@
+name: NAS100 scalper
+
+# Cron is UTC. Two runs cover US summer and winter time; the one that is not
+# needed exits in seconds (bot.py checks New York time).
+on:
+  schedule:
+    - cron: "12 13 * * 1-5"   # 09:12 New York in US summer time
+    - cron: "12 14 * * 1-5"   # 09:12 New York in US winter time
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "run, close or status"
+        default: "run"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: nas100-bot
+  cancel-in-progress: false
+
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    env:
+      METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
+      METAAPI_ACCOUNT_ID: ${{ secrets.METAAPI_ACCOUNT_ID }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RUN_SOURCE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'schedule' }}
+      SYMBOL: ${{ vars.SYMBOL }}
+      RISK_PERCENT: ${{ vars.RISK_PERCENT }}
+      STACK_SIZE: ${{ vars.STACK_SIZE }}
+      DAILY_LOSS_PERCENT: ${{ vars.DAILY_LOSS_PERCENT }}
+      MAX_SETUPS: ${{ vars.MAX_SETUPS }}
+      MAX_LOT: ${{ vars.MAX_LOT }}
+      ALLOW_REAL_ACCOUNT: ${{ vars.ALLOW_REAL_ACCOUNT }}
+      MODE: ${{ github.event.inputs.mode || 'run' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run bot
+        run: python bot.py "$MODE"
+      - name: Safety close (only if the run was cancelled or crashed)
+        if: (cancelled() || failure()) && env.MODE == 'run'
+        timeout-minutes: 10
+        run: python bot.py close

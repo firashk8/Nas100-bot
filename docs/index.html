@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a1230">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>MT5 Control</title>
+<style>
+  :root{
+    --bg:#060914; --bar:#0a1230; --card:#0d1328; --line:#1b2547; --text:#e6ecff; --muted:#7d89b3;
+    --cyan:#22e3d3; --green:#2ee59d; --red:#ff3d6e; --blue:#3d7bff; --gold:#e8c86a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:15px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       padding-bottom:40px;-webkit-tap-highlight-color:transparent}
+  header{position:sticky;top:0;z-index:5;background:linear-gradient(180deg,#0d1a4a,#0a1230);
+         padding:calc(env(safe-area-inset-top) + 12px) 16px 12px;display:flex;align-items:center;gap:10px;
+         border-bottom:1px solid #1d2b66}
+  header h1{font-size:17px;font-weight:600}
+  header small{display:block;color:var(--muted);font-size:12px}
+  header .sp{flex:1}
+  .icon{background:none;border:0;color:var(--text);font-size:20px;padding:6px}
+  main{padding:14px;display:grid;gap:14px;max-width:560px;margin:0 auto}
+  .status{padding:6px 2px}
+  .status .big{font-size:22px;font-weight:800;letter-spacing:.5px}
+  .status .sub{color:var(--muted);font-size:13px}
+  .on{color:var(--cyan);text-shadow:0 0 14px rgba(34,227,211,.45)}
+  .off{color:var(--red)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+  .card h2{font-size:15px;letter-spacing:.6px;text-transform:uppercase;color:var(--gold);
+           display:flex;align-items:center;gap:8px;margin-bottom:12px}
+  .card h2 .r{margin-left:auto;font-size:11px;letter-spacing:0;text-transform:none;color:var(--muted)}
+  .field{margin-bottom:10px}
+  .field label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+  .field .v{background:#0a0f20;border:1px solid var(--line);border-radius:10px;padding:10px 12px;
+            color:#9fc0ff;font-variant-numeric:tabular-nums}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .pos{color:var(--green)} .neg{color:var(--red)}
+  .la{border:1px solid var(--line);border-radius:12px;padding:12px;background:#0a0f20}
+  .la .t{color:var(--cyan);font-size:12px;font-weight:700;letter-spacing:.6px;margin-bottom:6px}
+  canvas{width:100%;height:150px;display:block}
+  .check{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;
+         padding:10px 12px;margin-top:8px;font-size:13px;color:#b9c6f0}
+  .check .dot{margin-left:auto;width:8px;height:8px;border-radius:50%;background:#33406b}
+  .check.ok .dot{background:var(--green);box-shadow:0 0 0 0 rgba(46,229,157,.6);animation:pulse 1.6s infinite}
+  @keyframes pulse{70%{box-shadow:0 0 0 8px rgba(46,229,157,0)}100%{box-shadow:0 0 0 0 rgba(46,229,157,0)}}
+  .note{color:var(--muted);font-size:12px;text-align:center;margin-top:10px}
+  .pill{font-size:11px;font-weight:800;padding:4px 10px;border-radius:999px;letter-spacing:.6px}
+  .pill.run{background:rgba(46,229,157,.12);color:var(--green)}
+  .pill.stop{background:rgba(255,61,110,.12);color:var(--red)}
+  .pill.wait{background:rgba(232,200,106,.12);color:var(--gold)}
+  .row{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .btns{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  button.b{border:0;border-radius:12px;padding:15px;font-size:15px;font-weight:800;letter-spacing:.4px;color:#04121a}
+  button.start{background:linear-gradient(90deg,#22e3d3,#3dc9ff)}
+  button.stopb{background:linear-gradient(90deg,#ff3d6e,#ff5a8a);color:#fff}
+  button.b:disabled{opacity:.45}
+  .plist .p{display:grid;grid-template-columns:auto 1fr auto;gap:2px 10px;padding:10px 0;border-top:1px solid var(--line);font-size:13px}
+  .plist .p:first-child{border-top:0}
+  .tag{font-weight:800;font-size:12px}
+  .tag.BUY{color:var(--blue)} .tag.SELL{color:var(--red)}
+  .muted{color:var(--muted)}
+  .log{font:12px/1.5 ui-monospace,Menlo,monospace;color:#9fb0e0;max-height:220px;overflow:auto;white-space:pre-wrap}
+  .sheet{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:flex-end;z-index:9}
+  .sheet.show{display:flex}
+  .sheet .in{background:var(--card);width:100%;border-radius:18px 18px 0 0;padding:20px 16px calc(20px + env(safe-area-inset-bottom));
+             max-width:560px;margin:0 auto}
+  .sheet input{width:100%;background:#0a0f20;border:1px solid var(--line);border-radius:10px;padding:12px;color:var(--text);font-size:15px;margin-top:4px}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1a2550;color:#fff;
+         padding:10px 16px;border-radius:10px;font-size:13px;opacity:0;transition:.3s;z-index:10;max-width:90%}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <div><h1>MT5 Control</h1><small id="repoLabel">not set up</small></div>
+  <div class="sp"></div>
+  <button class="icon" id="refreshBtn" aria-label="Refresh">⟳</button>
+  <button class="icon" id="setBtn" aria-label="Settings">⚙</button>
+</header>
+
+<main>
+  <div class="status">
+    <div class="big off" id="connBig">OFFLINE</div>
+    <div class="sub" id="connSub">Waiting for the bot…</div>
+  </div>
+
+  <section class="card">
+    <h2>▤ MT5 Account <span class="r" id="updated"></span></h2>
+    <div class="grid2">
+      <div class="field"><label>Server</label><div class="v" id="aServer">—</div></div>
+      <div class="field"><label>Account type</label><div class="v" id="aType">—</div></div>
+      <div class="field"><label>Balance</label><div class="v" id="aBal">—</div></div>
+      <div class="field"><label>Equity</label><div class="v" id="aEq">—</div></div>
+      <div class="field"><label>Symbol</label><div class="v" id="aSym">—</div></div>
+      <div class="field"><label>Today P/L</label><div class="v" id="aPL">—</div></div>
+    </div>
+
+    <div class="la">
+      <div class="t">∿ LIVE ANALYSIS · <span id="price">—</span></div>
+      <canvas id="chart" width="600" height="300"></canvas>
+      <div id="checks"></div>
+      <div class="note" id="msg">—</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>⚙ Bot Control</h2>
+    <div class="row"><span>Bot status</span><span class="pill stop" id="pill">STOPPED</span></div>
+    <div class="btns">
+      <button class="b start" id="startBtn">▶ START BOT</button>
+      <button class="b stopb" id="stopBtn">■ STOP BOT</button>
+    </div>
+    <div class="note" id="ctlNote"></div>
+  </section>
+
+  <section class="card">
+    <h2>☰ Open positions <span class="r" id="setups"></span></h2>
+    <div class="plist" id="plist"><div class="muted">No open positions</div></div>
+  </section>
+
+  <section class="card">
+    <h2>✎ Activity</h2>
+    <div class="log" id="log">—</div>
+  </section>
+</main>
+
+<div class="sheet" id="sheet"><div class="in">
+  <h2 style="margin-bottom:12px">Settings</h2>
+  <div class="field"><label>GitHub repository (owner/name)</label><input id="inRepo" placeholder="firashk8/nas100-bot" autocapitalize="off"></div>
+  <div class="field"><label>GitHub token (fine-grained, this repo only)</label><input id="inTok" type="password" placeholder="github_pat_…" autocapitalize="off"></div>
+  <div class="btns" style="margin-top:8px">
+    <button class="b stopb" id="cancelSet">Cancel</button>
+    <button class="b start" id="saveSet">Save</button>
+  </div>
+  <div class="note">The token stays on this phone only.</div>
+</div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const store = {
+  get(k){ try { return localStorage.getItem(k) || ""; } catch(e){ return mem[k] || ""; } },
+  set(k,v){ try { localStorage.setItem(k,v); } catch(e){ mem[k]=v; } }
+};
+const mem = {};
+const DEMO = new URLSearchParams(location.search).has("demo");
+
+function guessRepo(){
+  const h = location.hostname;
+  if (h.endsWith(".github.io")) {
+    const seg = location.pathname.split("/").filter(Boolean)[0];
+    if (seg) return h.split(".")[0] + "/" + seg;
+  }
+  return "";
+}
+let REPO = store.get("repo") || guessRepo();
+let TOKEN = store.get("token");
+
+function toast(t){ const el=$("toast"); el.textContent=t; el.classList.add("show"); setTimeout(()=>el.classList.remove("show"),2600); }
+function fmt(n,d=2){ return (n===null||n===undefined||isNaN(n)) ? "—" : Number(n).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d}); }
+
+async function gh(method, path, body, accept){
+  const r = await fetch(`https://api.github.com/repos/${REPO}${path}`, {
+    method, cache:"no-store",
+    headers:{ "Authorization":`Bearer ${TOKEN}`, "Accept": accept || "application/vnd.github+json",
+              "X-GitHub-Api-Version":"2022-11-28" },
+    body: body ? JSON.stringify(body) : undefined });
+  if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0,120)}`);
+  const txt = await r.text();
+  try { return JSON.parse(txt); } catch(e){ return txt; }
+}
+
+/* ---------------- control (Start / Stop) ---------------- */
+let controlEnabled = null;
+async function readControl(){
+  const d = await gh("GET", "/contents/control.json");
+  controlEnabled = !!JSON.parse(atob(d.content.replace(/\n/g,""))).enabled;
+  return d.sha;
+}
+async function setControl(enabled){
+  const sha = await readControl();
+  const content = btoa(JSON.stringify({enabled}));
+  await gh("PUT", "/contents/control.json", {message: enabled ? "Start bot" : "Stop bot", content, sha});
+  controlEnabled = enabled;
+}
+$("startBtn").onclick = async () => {
+  if (DEMO) return toast("Demo mode");
+  if (!TOKEN) return openSettings();
+  $("startBtn").disabled = true;
+  try {
+    await setControl(true);
+    const repo = await gh("GET", "");
+    await gh("POST", "/actions/workflows/trade.yml/dispatches", {ref: repo.default_branch, inputs:{mode:"run"}});
+    toast("Bot starting… connecting to MT5 takes 1–3 minutes");
+    $("ctlNote").textContent = "Start sent. Status updates every 30 s.";
+  } catch(e){ toast("Start failed: " + e.message); }
+  $("startBtn").disabled = false; render();
+};
+$("stopBtn").onclick = async () => {
+  if (DEMO) return toast("Demo mode");
+  if (!TOKEN) return openSettings();
+  if (!confirmStop()) return;
+  $("stopBtn").disabled = true;
+  try { await setControl(false); toast("Stop sent – the bot closes its positions within 30 s"); }
+  catch(e){ toast("Stop failed: " + e.message); }
+  $("stopBtn").disabled = false; render();
+};
+let stopArmed = 0;
+function confirmStop(){            // tap twice within 3 s (no browser pop-ups)
+  if (Date.now() - stopArmed < 3000) return true;
+  stopArmed = Date.now(); toast("Tap STOP again to confirm – this closes all bot positions"); return false;
+}
+
+/* ---------------- status ---------------- */
+let S = null;
+async function loadStatus(){
+  if (DEMO) { S = await (await fetch("sample_status.json")).json(); S.updated = new Date().toISOString(); S.state="RUNNING"; controlEnabled = true; return; }
+  if (!REPO || !TOKEN) { openSettings(); return; }
+  try {
+    S = await gh("GET", "/contents/status.json?ref=status&t=" + Date.now(), null, "application/vnd.github.raw+json");
+    if (typeof S === "string") S = JSON.parse(S);
+  } catch(e){ S = null; $("connSub").textContent = "No status yet – press START (" + e.message.slice(0,40) + ")"; }
+  try { await readControl(); } catch(e){}
+}
+
+function render(){
+  $("repoLabel").textContent = DEMO ? "demo preview" : (REPO || "not set up");
+  const age = S && S.updated ? (Date.now() - Date.parse(S.updated)) / 1000 : 1e9;
+  const live = S && S.state === "RUNNING" && age < 120;
+  $("connBig").textContent = live ? "CONNECTED" : (controlEnabled ? "ARMED" : "OFFLINE");
+  $("connBig").className = "big " + (live || controlEnabled ? "on" : "off");
+  $("connSub").textContent = live ? `Connected to ${S.account?.server || "MT5"}` :
+       (S?.message || (controlEnabled ? "Waiting for the NY session" : "Bot is stopped"));
+  $("updated").textContent = S?.updated ? "updated " + Math.round(age) + "s ago" : "";
+
+  const pill = $("pill");
+  if (live) { pill.textContent = "RUNNING"; pill.className = "pill run"; }
+  else if (controlEnabled) { pill.textContent = "ARMED"; pill.className = "pill wait"; }
+  else { pill.textContent = "STOPPED"; pill.className = "pill stop"; }
+  $("startBtn").disabled = live; $("stopBtn").disabled = !(live || controlEnabled);
+  if (!$("ctlNote").textContent || live) $("ctlNote").textContent = live ? "Trading NAS100 · NY session"
+      : controlEnabled ? "Armed – trades automatically every weekday 09:15–15:00 New York" : "";
+
+  const a = S?.account || {};
+  $("aServer").textContent = a.server || "—";
+  $("aType").textContent = a.type || "—";
+  $("aBal").textContent = a.balance != null ? fmt(a.balance) + " " + (a.currency||"") : "—";
+  $("aEq").textContent = a.equity ? fmt(a.equity) + " " + (a.currency||"") : "—";
+  $("aSym").textContent = S?.symbol || "—";
+  const pl = a.day_pl; $("aPL").innerHTML = pl == null ? "—" : `<span class="${pl>=0?'pos':'neg'}">${pl>=0?'+':''}${fmt(pl)}</span>`;
+  $("price").textContent = S?.bid ? fmt(S.bid) : "—";
+  $("msg").textContent = live ? (S.message || "") : "Live analysis runs while the bot is connected";
+
+  $("checks").innerHTML = (S?.checks || []).map(c =>
+    `<div class="check ${c.ok && live ? 'ok':''}">◎ ${c.label}<span class="dot"></span></div>`).join("");
+
+  const ps = S?.positions || [];
+  $("plist").innerHTML = ps.length ? ps.map(p => `<div class="p">
+      <span class="tag ${p.side}">${p.side}</span><span>${S.symbol} · ${p.volume} lot @ ${fmt(p.open)}</span>
+      <span class="${p.profit>=0?'pos':'neg'}">${p.profit>=0?'+':''}${fmt(p.profit)}</span>
+      <span></span><span class="muted">SL ${fmt(p.sl)} · TP ${fmt(p.tp)}</span><span></span></div>`).join("")
+    : '<div class="muted">No open positions</div>';
+  const fl = ps.reduce((s,p)=>s+(p.profit||0),0);
+  $("setups").textContent = S?.today ? `${ps.length} open · ${ps.length ? (fl>=0?'+':'')+fmt(fl)+' · ' : ''}setups ${S.today.setups}/${S.today.max_setups}` : "";
+  $("log").textContent = (S?.log || []).slice().reverse().join("\n") || "—";
+  drawChart();
+}
+
+function drawChart(){
+  const cv = $("chart"), ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height; ctx.clearRect(0,0,W,H);
+  const c = S?.chart?.close || [];
+  ctx.strokeStyle = "#1b2547"; ctx.lineWidth = 1;
+  for (let i=1;i<4;i++){ ctx.beginPath(); ctx.moveTo(0,H*i/4); ctx.lineTo(W,H*i/4); ctx.stroke(); }
+  if (c.length < 2) { ctx.fillStyle="#7d89b3"; ctx.font="22px system-ui"; ctx.fillText("No market data yet", 20, H/2); return; }
+  const all = c.concat(S.chart.ema9||[], S.chart.ema21||[]).filter(v=>v!=null);
+  const lo = Math.min(...all), hi = Math.max(...all), pad = (hi-lo)*0.08 || 1;
+  const x = i => i*(W-10)/(c.length-1) + 5, y = v => H - ((v-lo+pad)/(hi-lo+2*pad))*H;
+  const line = (arr, color, w) => { if(!arr||arr.length<2) return; ctx.beginPath(); ctx.strokeStyle=color; ctx.lineWidth=w;
+    arr.forEach((v,i)=> i? ctx.lineTo(x(i),y(v)) : ctx.moveTo(x(i),y(v))); ctx.stroke(); };
+  const g = ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,"rgba(232,200,106,.25)"); g.addColorStop(1,"rgba(232,200,106,0)");
+  ctx.beginPath(); c.forEach((v,i)=> i? ctx.lineTo(x(i),y(v)) : ctx.moveTo(x(i),y(v)));
+  ctx.lineTo(x(c.length-1),H); ctx.lineTo(x(0),H); ctx.fillStyle=g; ctx.fill();
+  line(S.chart.ema21, "#3d7bff", 2); line(S.chart.ema9, "#22e3d3", 2); line(c, "#e8c86a", 3);
+  ctx.font="18px system-ui"; ctx.fillStyle="#22e3d3"; ctx.fillText("EMA 9",10,22); ctx.fillStyle="#3d7bff"; ctx.fillText("EMA 21",80,22);
+}
+
+/* ---------------- settings ---------------- */
+function openSettings(){ $("inRepo").value = REPO; $("inTok").value = TOKEN; $("sheet").classList.add("show"); }
+$("setBtn").onclick = openSettings;
+$("cancelSet").onclick = () => $("sheet").classList.remove("show");
+$("saveSet").onclick = () => {
+  REPO = $("inRepo").value.trim().replace(/^https?:\/\/github.com\//,""); TOKEN = $("inTok").value.trim();
+  store.set("repo", REPO); store.set("token", TOKEN); $("sheet").classList.remove("show"); tick();
+};
+$("refreshBtn").onclick = () => tick();
+
+async function tick(){ await loadStatus(); render(); }
+tick(); setInterval(tick, 15000); setInterval(render, 1000);
+</script>
+</body>
+</html>
