@@ -20,7 +20,7 @@ jobs:
           python-version: "3.11"
       - run: pip install yfinance pandas
       - name: Run backtest on real NQ 1-minute data
-        run: python backtest/backtest2.py
+        run: python backtest/trend.py
       - name: Save results to the research branch
         run: |
           git config user.name "backtest-bot"
