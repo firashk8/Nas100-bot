@@ -93,7 +93,7 @@ def run_noise(sess, m=1.0, lookback=14, check_every=1, rnd=None, always_long=Fal
                 day_pts += r
                 pos = 0
             if pos == 0 and not last and k % check_every == 0 and k > 0:
-                want = 1 if bc > ub else -1 if bc < lb else 0
+                want = 1 if bc > max(ub, vwap) else -1 if bc < min(lb, vwap) else 0
                 if want and rnd is not None:
                     want = rnd.choice([1, -1])
                 if want == 1:
