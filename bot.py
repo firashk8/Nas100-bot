@@ -93,13 +93,14 @@ class Settings:
     adaptive_targets: bool = True    # targets follow market speed (ATR) instead of fixed points
     streaming: bool = True           # live price stream from MetaApi (falls back to polling)
     # ---- intelligence
-    regime_filter: bool = True       # trend / mixed / chop detection (efficiency ratio)
-    mtf_confirm: bool = True         # 5-min and 15-min trends must agree with the entry
-    self_learning: bool = True       # skip conditions that keep losing (learned from own results)
+    regime_filter: bool = True       # skip choppy markets (bursts are exempt) - helped on real data
+    mtf_confirm: bool = False        # 5m/15m agreement - hurt on real data, off by default
+    self_learning: bool = False      # time/regime memory - unproven, off by default
+    skip_hours: str = "13"           # New York hours with no new baskets (13:00-14:00 lost on real data)
     trailing_lock: bool = True       # after breakeven, trail the stop behind the best price
     agent: bool = True               # ask the prediction agent before each basket (if a model exists)
     agent_threshold: float = 0.55    # minimum predicted win chance
-    stack_trend_filter: bool = True  # only open baskets when price is outside the noise area
+    stack_trend_filter: bool = False # noise-area filter - hurt on real data, off by default
 
     @classmethod
     def load(cls):
@@ -140,12 +141,13 @@ class Settings:
             adaptive_targets=env("ADAPTIVE_TARGETS", "true").lower() == "true",
             streaming=env("PRICE_STREAMING", "true").lower() == "true",
             regime_filter=env("REGIME_FILTER", "true").lower() == "true",
-            mtf_confirm=env("MTF_CONFIRM", "true").lower() == "true",
-            self_learning=env("SELF_LEARNING", "true").lower() == "true",
+            mtf_confirm=env("MTF_CONFIRM", "false").lower() == "true",
+            self_learning=env("SELF_LEARNING", "false").lower() == "true",
+            skip_hours=env("SKIP_HOURS", "13"),
             trailing_lock=env("TRAILING_LOCK", "true").lower() == "true",
             agent=env("AGENT", "true").lower() == "true",
             agent_threshold=float(env("AGENT_THRESHOLD", "0.55")),
-            stack_trend_filter=env("STACK_TREND_FILTER", "true").lower() == "true",
+            stack_trend_filter=env("STACK_TREND_FILTER", "false").lower() == "true",
         )
         if not env("RISK_PERCENT"):
             s.risk_percent = default_risk(s.style)
@@ -1079,7 +1081,7 @@ class Engine:
                      (side == "sell" and st["close"] < min(st["lo"], st["vwap"]))
                 if not ok:
                     return                      # market still inside its normal noise: no basket
-        allowed, cap, why = self.gate(side, t)
+        allowed, cap, why = self.gate(side, t, burst=bool(forced_side))
         if not allowed:
             return
         spread = self.ask - self.bid
@@ -1209,14 +1211,14 @@ class Engine:
         self.regime, self.er = market_regime(self.candles)
         self.mtf = {"5m": tf_trend(self.candles, 5), "15m": tf_trend(self.candles, 15)}
 
-    def gate(self, side, t):
-        """Intelligence checks before a basket. Returns (allowed, basket-count cap, reason)."""
+    def gate(self, side, t, burst=False):
+        """Checks before a basket. Returns (allowed, basket-count cap, reason)."""
         cap = None
-        if self.s.regime_filter:
-            if self.regime == "chop":
-                return False, None, "market choppy"
-            if self.regime == "mixed":
-                cap = stack_count_for(self.s, 0)            # smallest basket only
+        hours = {int(h) for h in str(self.s.skip_hours).split(",") if h.strip().isdigit()}
+        if t.hour in hours:
+            return False, None, "skipped hour"
+        if self.s.regime_filter and self.regime == "chop" and not burst:
+            return False, None, "market choppy"
         if self.s.mtf_confirm:
             want = "up" if side == "buy" else "down"
             for tf in ("5m", "15m"):

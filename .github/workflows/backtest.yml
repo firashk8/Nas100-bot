@@ -21,7 +21,6 @@ jobs:
       - run: pip install yfinance pandas
       - name: Train and test the prediction agent
         run: |
-          python backtest/replay.py stack_raw
           python backtest/replay.py stack
       - name: Save results to the research branch
         run: |
