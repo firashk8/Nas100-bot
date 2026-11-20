@@ -1151,6 +1151,12 @@ class Engine:
             return
         gap = max(adaptive_tp(self.s, self.candles)[0], 5.0)       # keep one target of room
         new_sl = bk["best"] - gap if buy else bk["best"] + gap
+        # a stop must stay on the losing side of the CURRENT price, or the broker rejects it
+        buffer = max(self.ask - self.bid, 1.0) * 2
+        if buy:
+            new_sl = min(new_sl, self.bid - buffer)
+        else:
+            new_sl = max(new_sl, self.ask + buffer)
         cur = bk.get("trail_sl", bk["entry"])
         if (buy and new_sl > cur + 1) or (not buy and new_sl < cur - 1):
             self.last_trail = now

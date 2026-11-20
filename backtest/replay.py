@@ -94,8 +94,13 @@ class ReplayBroker:
         return {"stringCode": "TRADE_RETCODE_DONE"}
 
     async def modify(self, pid, sl, tp):
+        m = self.mid()
+        bid, ask = m - SPREAD / 2, m + SPREAD / 2
         for p in self.pos:
             if p["id"] == pid:
+                buy = p["type"] == "POSITION_TYPE_BUY"
+                if sl is not None and ((buy and sl >= bid) or (not buy and sl <= ask)):
+                    raise RuntimeError("TRADE_RETCODE_INVALID_STOPS")     # like a real broker
                 p["stopLoss"], p["takeProfit"] = sl, tp
 
     async def close(self, pid):
