@@ -25,6 +25,12 @@
   .status{padding:6px 2px}
   .status .big{font-size:22px;font-weight:800;letter-spacing:.5px}
   .status .sub{color:var(--muted);font-size:13px}
+  .session{margin-top:10px}
+  .session small{display:block;color:var(--muted);font-size:11px;letter-spacing:1.2px}
+  .session .pl{font-size:40px;font-weight:800;letter-spacing:-.5px;font-variant-numeric:tabular-nums}
+  .session .pl.pos{color:var(--green);text-shadow:0 0 22px rgba(46,229,157,.35)}
+  .session .pl.neg{color:var(--red)}
+  .session .sp{color:var(--muted);font-size:12px}
   .on{color:var(--cyan);text-shadow:0 0 14px rgba(34,227,211,.45)}
   .off{color:var(--red)}
   .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
@@ -90,6 +96,9 @@
   <div class="status">
     <div class="big off" id="connBig">OFFLINE</div>
     <div class="sub" id="connSub">Waiting for the bot…</div>
+    <div class="session"><small>SESSION P&amp;L (REAL, FROM MT5 EQUITY)</small>
+      <div class="pl" id="sessPL">$0.00</div>
+      <div class="sp" id="sessSub"></div></div>
   </div>
 
   <section class="card">
@@ -276,6 +285,11 @@ function render(){
   $("modeNote").textContent = mode ? (S?.style && S.style !== mode && live ? "running: " + S.style : "")
                                    : "set by GitHub variable";
   const a = S?.account || {};
+  const spl = a.day_pl;
+  $("sessPL").textContent = spl == null ? "$0.00" : (spl >= 0 ? "+$" : "−$") + fmt(Math.abs(spl));
+  $("sessPL").className = "pl " + (spl == null ? "" : spl >= 0 ? "pos" : "neg");
+  const fl2 = (S?.positions || []).reduce((s,p)=>s+(p.profit||0),0);
+  $("sessSub").textContent = S?.positions?.length ? `${S.positions.length} open positions · floating ${fl2>=0?"+":""}${fmt(fl2)}` : "";
   $("aServer").textContent = a.server || "—";
   $("aType").textContent = a.type || "—";
   $("aBal").textContent = a.balance != null ? fmt(a.balance) + " " + (a.currency||"") : "—";
