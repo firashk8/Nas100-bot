@@ -752,14 +752,26 @@ class Broker:
         return await self.conn.get_symbol_specification(symbol=self.s.symbol)
 
     async def price(self):
+        """Live stream price; if the stream has silently frozen (no change for 15 s) use a
+        direct request instead, so the bot never trades on a stale price."""
+        import time as _t
         if getattr(self, "stream", None):
             try:
                 p = self.stream.terminal_state.price(self.s.symbol)
                 if p and p.get("bid") and p.get("ask"):
-                    return p
+                    key = (p["bid"], p["ask"])
+                    now = _t.monotonic()
+                    if key != getattr(self, "_last_key", None):
+                        self._last_key, self._last_change = key, now
+                    if now - getattr(self, "_last_change", now) < 15:
+                        return p
+                    if now - getattr(self, "_last_rpc", 0) < 1:      # stale: poll at most 1/s
+                        return getattr(self, "_last_rpc_price", p)
             except Exception:
                 pass
-        return await self.conn.get_symbol_price(symbol=self.s.symbol)
+        p = await self.conn.get_symbol_price(symbol=self.s.symbol)
+        self._last_rpc, self._last_rpc_price = _t.monotonic(), p
+        return p
 
     async def bot_positions(self):
         out = []
@@ -1465,7 +1477,7 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
         if t0 > end_t - timedelta(minutes=10):
             idle("NY session is over for today. Bot will start next trading day.")
             return
-    elif not (start_win <= t0 <= open_t - timedelta(minutes=1)):
+    elif not (start_win <= t0 <= at(day, 10, 30)):     # tolerate GitHub's late cron starts
         print(f"Not this run's window (NY {t0:%H:%M}) - exiting quietly.")
         return
 
