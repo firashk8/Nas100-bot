@@ -19,9 +19,9 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install yfinance pandas
-      - name: Strategy survey
+      - name: Train and test the prediction agent
         run: |
-          python backtest/world.py
+          python backtest/train_agent.py
       - name: Save results to the research branch
         run: |
           git config user.name "backtest-bot"

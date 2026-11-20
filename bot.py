@@ -97,6 +97,8 @@ class Settings:
     mtf_confirm: bool = True         # 5-min and 15-min trends must agree with the entry
     self_learning: bool = True       # skip conditions that keep losing (learned from own results)
     trailing_lock: bool = True       # after breakeven, trail the stop behind the best price
+    agent: bool = True               # ask the prediction agent before each basket (if a model exists)
+    agent_threshold: float = 0.55    # minimum predicted win chance
     stack_trend_filter: bool = True  # only open baskets when price is outside the noise area
 
     @classmethod
@@ -141,6 +143,8 @@ class Settings:
             mtf_confirm=env("MTF_CONFIRM", "true").lower() == "true",
             self_learning=env("SELF_LEARNING", "true").lower() == "true",
             trailing_lock=env("TRAILING_LOCK", "true").lower() == "true",
+            agent=env("AGENT", "true").lower() == "true",
+            agent_threshold=float(env("AGENT_THRESHOLD", "0.55")),
             stack_trend_filter=env("STACK_TREND_FILTER", "true").lower() == "true",
         )
         if not env("RISK_PERCENT"):
@@ -339,6 +343,55 @@ def learned_block(stats, key, min_n=8):
     """True if this time-slot/regime has enough history and loses money overall."""
     st = (stats or {}).get(key)
     return bool(st and st.get("n", 0) >= min_n and st.get("pnl", 0) < 0)
+
+
+JOURNAL = []          # every basket: market snapshot + result (used to train the agent)
+AGENT_FEATURES = ["er", "mtf_agree", "mtf_against", "min_since_open", "atr_pct", "vwap_dist",
+                  "ema_slope", "spread_atr", "move10s", "count", "burst", "streak"]
+
+
+def snapshot(candles, side, t, spread, recent_move, count, burst, streak):
+    """Numbers that describe the market at the moment of an entry (all pointing 'with the trade')."""
+    sign = 1 if side == "buy" else -1
+    er = efficiency_ratio(candles) or 0.0
+    m5, m15 = tf_trend(candles, 5), tf_trend(candles, 15)
+    want = "up" if side == "buy" else "down"
+    agree = sum(1 for m in (m5, m15) if m == want)
+    against = sum(1 for m in (m5, m15) if m and m != want)
+    atr = avg_range(candles) or 1e-9
+    last = candles[-1].close if candles else 0
+    vw = vwap_series(candles)[-1] if candles else None
+    e9 = ema_series([c.close for c in candles], 9) if candles else [0, 0]
+    mins = (t.hour * 60 + t.minute) - (9 * 60 + 30)
+    return {"er": er, "mtf_agree": agree, "mtf_against": against, "min_since_open": mins / 390,
+            "atr_pct": atr / last * 100 if last else 0,
+            "vwap_dist": sign * (last - vw) / atr if vw else 0.0,
+            "ema_slope": sign * (e9[-1] - e9[-2]) / atr if len(e9) > 1 else 0.0,
+            "spread_atr": spread / atr, "move10s": sign * recent_move / atr,
+            "count": count / 10, "burst": 1.0 if burst else 0.0, "streak": min(streak, 5) / 5}
+
+
+def agent_predict(model, feats):
+    """Win probability from a small logistic model {'w': {...}, 'b': x, 'mu': {...}, 'sd': {...}}."""
+    if not model:
+        return None
+    z = model.get("b", 0.0)
+    for k in AGENT_FEATURES:
+        x = (feats.get(k, 0.0) - model["mu"].get(k, 0.0)) / (model["sd"].get(k, 1.0) or 1.0)
+        z += model["w"].get(k, 0.0) * x
+    z = max(-30, min(30, z))
+    return 1 / (1 + math.exp(-z))
+
+
+def load_agent_model():
+    for path in (os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent_model.json"),):
+        try:
+            with open(path) as f:
+                m = json.load(f)
+            return m if m.get("enabled", True) else None
+        except Exception:
+            pass
+    return None
 
 
 def avg_range(candles, n=14):
@@ -772,6 +825,8 @@ class Engine:
     stats: dict = field(default_factory=dict)
     stats_dirty: bool = False
     last_trail: datetime = None
+    model: dict = None
+    agent_p: float = None
 
     def say(self, text):
         line = f"{now_ny():%H:%M:%S} {text}"
@@ -1035,6 +1090,16 @@ class Engine:
         count = stack_count_for(self.s, self.win_streak)
         if cap:
             count = min(count, cap)
+        mv = 0.0
+        for tt, px in self.recent:
+            if (t - tt).total_seconds() >= 10:
+                mv = self.bid - px
+        feats = snapshot(self.candles, side, t, spread, mv, count, bool(forced_side), self.win_streak)
+        if self.s.agent and self.model:
+            self.agent_p = agent_predict(self.model, feats)
+            thr = self.s.agent_threshold if env("AGENT_THRESHOLD") else self.model.get("threshold", self.s.agent_threshold)
+            if self.agent_p is not None and self.agent_p < thr:
+                return                                   # agent predicts a likely loss: skip
         per, n, tp_money, sl_money, sl_pts = stack_plan(balance, self.spec, self.s, count)
         per_pos = self.s.stack_exit == "position"
         first_tp, tp_step = adaptive_tp(self.s, self.candles)
@@ -1062,7 +1127,7 @@ class Engine:
         self.basket = {"side": side, "legs": legs, "tp": tp_money, "sl": sl_money,
                        "entry": legs[0][1], "be_done": False}
         self.open_trade = {"balance": balance, "at": now_ny(), "side": side,
-                           "key": learn_key(t, self.regime)}
+                           "key": learn_key(t, self.regime), "feats": feats}
         last_tp = first_tp + (len(legs) - 1) * tp_step
         target_txt = (f"closes one by one at +{first_tp:g}..+{last_tp:g} pts" if per_pos
                       else f"target +${tp_money:.2f}")
@@ -1167,6 +1232,9 @@ class Engine:
         key = self.open_trade.get("key")
         if not key:
             return
+        if self.open_trade.get("feats"):
+            JOURNAL.append(dict(self.open_trade["feats"], pl=round(pl, 2), win=1 if pl > 0 else 0,
+                                day=str(self.open_trade["at"].date())))
         st = self.stats.setdefault(key, {"n": 0, "wins": 0, "pnl": 0.0})
         st["n"] += 1
         st["wins"] += 1 if pl >= 0 else 0
@@ -1241,6 +1309,9 @@ class Engine:
                  "ok": bool(self.mtf.get("5m")) and self.mtf.get("5m") == self.mtf.get("15m")},
                 {"label": f"Learned from {sum(v.get('n', 0) for v in self.stats.values())} past baskets",
                  "ok": True},
+                {"label": ("Agent: no model yet" if not self.model else
+                           f"Agent: last check {self.agent_p * 100:.0f}% win chance" if self.agent_p is not None
+                           else "Agent: ready"), "ok": bool(self.model)},
                 {"label": "Risk limits OK" if not self.halted else f"Halted: {self.halted}",
                  "ok": not self.halted},
             ]
@@ -1378,6 +1449,10 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
         gap_checked = False
         if s.self_learning:
             eng.stats = gh.read_json("learning.json") or {}
+        if s.agent:
+            eng.model = load_agent_model()
+            if eng.model:
+                eng.say(f"Prediction agent loaded (trained on {eng.model.get('n', '?')} baskets)")
         eng.say(f"Connected to {info.get('server')} - balance {info.get('balance')} "
                 f"{info.get('currency')} - {s.style} mode")
         gh.write_status(eng.status("RUNNING"))
@@ -1436,6 +1511,9 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                 pass
             if eng.stats_dirty:
                 gh.write_json("learning.json", eng.stats)
+            if JOURNAL and s.agent:
+                old = gh.read_json("journal.json") or []
+                gh.write_json("journal.json", (old + JOURNAL)[-5000:])
             eng.say("Stopped by user" if stopped_by_user else "Session finished - all positions closed")
             gh.write_status(eng.status("STOPPED"))
 
