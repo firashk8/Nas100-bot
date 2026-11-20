@@ -19,9 +19,9 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install yfinance pandas
-      - name: Replay the real bot on real NQ 1-minute data
+      - name: Strategy survey
         run: |
-          python backtest/replay.py trend
+          python backtest/world.py
       - name: Save results to the research branch
         run: |
           git config user.name "backtest-bot"
