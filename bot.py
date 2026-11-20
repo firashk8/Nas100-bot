@@ -600,6 +600,17 @@ def is_demo_server(server):
     return "demo" in s or "trial" in s
 
 
+US_HOLIDAYS = {  # Nasdaq closed
+    "2026-11-26", "2026-12-25", "2027-01-01", "2027-01-18", "2027-02-15", "2027-03-26",
+    "2027-05-31", "2027-06-18", "2027-07-05", "2027-09-06", "2027-11-25", "2027-12-24",
+}
+US_EARLY_CLOSE = {"2026-11-27", "2026-12-24", "2027-11-26"}   # cash market closes 13:00 New York
+
+
+def session_end(day):
+    return at(day, 12, 45) if day.isoformat() in US_EARLY_CLOSE else at(day, 15, 0)
+
+
 def at(day, hh, mm):
     return datetime.combine(day, time(hh, mm), NY)
 
@@ -804,7 +815,7 @@ class Engine:
     positions: list = field(default_factory=list)
     message: str = "Starting"
     # aggressive-mode state
-    spreads: deque = field(default_factory=lambda: deque(maxlen=300))
+    spreads: deque = field(default_factory=lambda: deque(maxlen=1500))   # ~5 min of ticks
     trades_today: int = 0
     wins: int = 0
     losses: int = 0
@@ -1058,7 +1069,10 @@ class Engine:
     # ---- stack & compound: many positions, one basket target, checked every second
     async def stack_step(self, t: datetime, forced_side=None):
         day = t.date()
-        if not (at(day, 9, 35) <= t <= at(day, 14, 45)) or self.halted:
+        last_entry = min(at(day, 14, 45), session_end(day) - timedelta(minutes=15))
+        if not (at(day, 9, 35) <= t <= last_entry) or self.halted:
+            return
+        if not self.candles:
             return
         if self.positions or self.open_trade or self.basket:
             return
@@ -1103,6 +1117,17 @@ class Engine:
             if self.agent_p is not None and self.agent_p < thr:
                 return                                   # agent predicts a likely loss: skip
         per, n, tp_money, sl_money, sl_pts = stack_plan(balance, self.spec, self.s, count)
+        free = float(self.info.get("freeMargin") or self.info.get("equity") or balance)
+        lev = float(self.info.get("leverage") or 100)
+        contract = float(self.spec.get("contractSize") or 1.0)
+        per_margin = (self.ask * per * contract) / lev
+        if per_margin > 0 and n * per_margin > 0.8 * free:
+            n = int(0.8 * free // per_margin)
+            if n < 1:
+                self.say("Basket skipped: not enough free margin")
+                return
+            sl_money = balance * self.s.basket_sl_percent / 100
+            sl_pts = sl_money / (per * n * contract)
         per_pos = self.s.stack_exit == "position"
         first_tp, tp_step = adaptive_tp(self.s, self.candles)
         entry = self.ask if side == "buy" else self.bid
@@ -1184,13 +1209,18 @@ class Engine:
             self.basket["pnl"] = pnl
             self.basket["open"] = len(self.positions)
             hit = "safety stop" if self.positions and pnl <= -self.basket["sl"] else None
+            realized = float(self.info.get("balance", 0)) - (self.open_trade or {}).get("balance", 1e18)
             if (self.s.stack_breakeven and not self.basket.get("be_done") and self.positions
-                    and len(self.positions) < len(self.basket["legs"])):
+                    and len(self.positions) < len(self.basket["legs"]) and realized > 0):
                 # at least one position already closed in profit -> lock the rest at entry
+                buy = self.basket["side"] == "buy"
                 for p in self.positions:
+                    be = float(p.get("openPrice") or self.basket["entry"])
+                    # only if price is safely beyond entry, otherwise the broker rejects the stop
+                    if (buy and self.bid - be < 1.0) or (not buy and be - self.ask < 1.0):
+                        continue
                     try:
-                        await self.b.modify(p["id"], round(float(p.get("openPrice") or self.basket["entry"]),
-                                                           self.digits), p.get("takeProfit"))
+                        await self.b.modify(p["id"], round(be, self.digits), p.get("takeProfit"))
                     except Exception as e:
                         self.say(f"breakeven move failed: {e}")
                 self.basket["be_done"] = True
@@ -1406,7 +1436,7 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
     gh = gh or GitHub()
     t0 = clock()
     day = t0.date()
-    start_win, open_t, end_t = at(day, 8, 40), at(day, 9, 30), at(day, 15, 0)
+    start_win, open_t, end_t = at(day, 8, 40), at(day, 9, 30), session_end(day)
 
     def idle(msg):
         print(msg)
@@ -1424,6 +1454,9 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
         return
     if t0.weekday() >= 5:
         idle("Weekend - market closed. Bot will start Monday 09:15 New York.")
+        return
+    if day.isoformat() in US_HOLIDAYS:
+        idle("US market holiday - no trading today.")
         return
     if s.run_source == "manual":
         if t0 < start_win:
@@ -1511,7 +1544,22 @@ async def run_session(s: Settings, broker_factory=Broker, gh=None, clock=now_ny,
                     gh.write_status(eng.status("RUNNING"))
                 await asyncio.sleep(0.2 if getattr(b, "fast", False) else tick)
         finally:
-            await eng.close_all()
+            # Bug 5 fix: make sure nothing is left open overnight - retry, then fail loudly
+            left = []
+            for attempt in range(3):
+                try:
+                    await eng.close_all()
+                    left = await b.bot_positions()
+                except Exception as e:
+                    print(f"close attempt {attempt + 1} failed: {e}")
+                    left = ["unknown"]
+                if not left:
+                    break
+                await asyncio.sleep(2)
+            if left:
+                eng.say("WARNING: some positions could not be closed - safety close will retry")
+                gh.write_status(eng.status("STOPPED"))
+                raise RuntimeError("positions still open at session end")
             eng.positions = []
             try:
                 eng.info = await b.info()
