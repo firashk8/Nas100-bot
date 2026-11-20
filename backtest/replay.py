@@ -128,7 +128,7 @@ class MemGH:
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "stack"
-    style = "stack" if mode == "ultra" else mode
+    style = "stack" if mode in ("ultra", "stack_raw") else mode
     if mode == "ultra":
         os.environ["STACK_PRESET"] = "ultra"
     days = load_real()
@@ -164,6 +164,9 @@ def main():
 
         Clock.t = datetime(y, mo, dd, 9, 12, tzinfo=NY)
         s = bot.Settings(token="x", account_id="y", run_source="schedule")
+        if mode == "stack_raw":     # all smart filters and the agent switched off
+            s.regime_filter = s.mtf_confirm = s.self_learning = s.agent = s.stack_trend_filter = False
+            os.environ["REGIME_FILTER"] = "false"
         start = ReplayBroker.balance
         gh = MemGH(style)
         asyncio.run(bot.run_session(s, ReplayBroker, gh, clock=lambda: Clock.t, noise_fetcher=noise))
