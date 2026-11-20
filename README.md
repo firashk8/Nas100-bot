@@ -96,6 +96,12 @@ Based on the published "Beat the Market" intraday momentum strategy (Zarattini, 
   - Stack: $1,000 → **$843**
   - Ultra: **wiped out in 5 days**
   - Trend: $1,000 → **$986**
+- **Loss fixes from real-data analysis (Nov 2026 update):**
+  - **No new baskets in choppy markets,** unless it's a ⚡ burst.
+  - **No new baskets from 13:00 to 14:00 New York** (`SKIP_HOURS`), the hour that lost money.
+  - **Off by default** because they hurt on real data: 5m/15m confirmation, the noise-area trend filter and self-learning.
+  - **Trailing stops never go past the current price,** so Exness doesn't reject them.
+  - **Replay on 19 real days** (in-sample, compounding): $1,000 → $11,560, with days from −30% to +205%. It needs a demo test before you trust it.
 - **Ultra (no limits):** set the variable `STACK_PRESET` = `ultra`. It sets 0.5 lot per position for each $1,000, a 30% basket safety stop, **no daily loss limit**, no pause after losses, no trend filter, and up to 500 baskets a day. Any variable you set yourself still overrides it.
 - **Real accounts:** still blocked unless `ALLOW_REAL_ACCOUNT=true`.
 
