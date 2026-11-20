@@ -11,7 +11,7 @@ import os
 import statistics
 
 OUT = os.environ.get("OUT_DIR", "results")
-COST_PTS = 2.0          # points per side
+COST_PCT = 0.0001        # 0.01% per side (~2 points at today's US100 level)
 FIN_YR = 0.06           # 6%/year overnight financing on held positions (approx. CFD swap)
 
 
@@ -108,7 +108,7 @@ def run_daily(rows, pos, scale=None):
     for i in range(len(c) - 1):
         p = pos[i] * (scale[i] if scale else 1.0)
         r = p * (c[i + 1] / c[i] - 1)
-        cost = abs(p - prev) * COST_PTS / c[i] + abs(p) * FIN_YR / 252
+        cost = abs(p - prev) * COST_PCT + abs(p) * FIN_YR / 252
         if abs(p - prev) > 1e-9 and p != 0:
             trades += 1
         eq *= 1 + r - cost
@@ -129,17 +129,17 @@ def run_intraday(rows, kind):
         if kind == "Larry Williams breakout":
             lvl = o + 0.5 * rng
             if h >= lvl:
-                r = (c - lvl - 2 * COST_PTS) / lvl
+                r = (c - lvl) / lvl - 2 * COST_PCT
         elif kind == "Gap fade":
             g = o / pc - 1
             if g > 0.005:
-                r = (o - c - 2 * COST_PTS) / o
+                r = (o - c) / o - 2 * COST_PCT
             elif g < -0.005:
-                r = (c - o - 2 * COST_PTS) / o
+                r = (c - o) / o - 2 * COST_PCT
         elif kind == "Overnight only (close->open)":
-            r = (o - pc - 2 * COST_PTS) / pc - FIN_YR / 252
+            r = (o - pc) / pc - 2 * COST_PCT - FIN_YR / 252
         elif kind == "Day only (open->close)":
-            r = (c - o - 2 * COST_PTS) / o
+            r = (c - o) / o - 2 * COST_PCT
         out.append(r)
     eq, eqs, trades = 1.0, [], 0
     for r in out:
@@ -229,7 +229,7 @@ def main():
                      f"{m['trades']} | {m['win']*100:.0f}% | {a*100:+.0f}% | {b*100:+.0f}% |")
         return L
     lines = [f"# Famous strategies on the Nasdaq-100, {rows[0][0]} to {rows[-1][0]} ({years:.1f} years)",
-             f"Costs: {COST_PTS} pts per side, overnight financing {FIN_YR*100:.0f}%/year on held positions.",
+             f"Costs: {COST_PCT*100:.2f}% per side, overnight financing {FIN_YR*100:.0f}%/year on held positions.",
              "Sorted by Sharpe ratio (return per unit of risk).", ""] + table(res) + \
             ["", "## Loss-avoidance tactics", ""] + table(tactics)
     os.makedirs(OUT, exist_ok=True)
