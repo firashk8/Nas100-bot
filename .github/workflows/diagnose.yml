@@ -4,6 +4,10 @@ name: MetaApi check (read-only)
 # Prints selected fields only: never the token, never a password.
 on:
   workflow_dispatch:
+    inputs:
+      account_id:
+        description: "Optional MetaApi account id (overrides the secret)"
+        default: ""
 
 permissions:
   contents: read
@@ -14,7 +18,7 @@ jobs:
     timeout-minutes: 5
     env:
       METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
-      METAAPI_ACCOUNT_ID: ${{ secrets.METAAPI_ACCOUNT_ID }}
+      METAAPI_ACCOUNT_ID: ${{ github.event.inputs.account_id || secrets.METAAPI_ACCOUNT_ID }}
     steps:
       - name: Account status from MetaApi
         run: |
@@ -24,7 +28,7 @@ jobs:
           BASE="https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${METAAPI_ACCOUNT_ID}"
           code=$(curl -s -o acct.json -w "%{http_code}" -H "auth-token: ${METAAPI_TOKEN}" "$BASE")
           echo "HTTP status from MetaApi: $code"
-          jq '{name, login, server, platform, type, region, reliability, state, connectionStatus, application, magic, resourceSlots, version, provisioningProfileId, primaryAccountId, accessRights, riskManagementApiEnabled, metastatsApiEnabled, allocateDedicatedIp, keywords}' acct.json 2>/dev/null || head -c 600 acct.json
+          jq '{name, login, connections, accountReplicas, primaryReplica,, server, platform, type, region, reliability, state, connectionStatus, application, magic, resourceSlots, version, provisioningProfileId, primaryAccountId, accessRights, riskManagementApiEnabled, metastatsApiEnabled, allocateDedicatedIp, keywords}' acct.json 2>/dev/null || head -c 600 acct.json
           echo "--- full keys returned (values hidden) ---"
           jq -r 'keys[]' acct.json 2>/dev/null | tr '\n' ' '; echo
           echo "--- any error / reason fields ---"
