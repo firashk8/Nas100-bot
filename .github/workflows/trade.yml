@@ -11,6 +11,9 @@ on:
       mode:
         description: "run, close or status"
         default: "run"
+      account_id:
+        description: "Optional MetaApi account id (overrides the secret)"
+        default: ""
 
 permissions:
   contents: write
@@ -26,7 +29,7 @@ jobs:
     timeout-minutes: 358
     env:
       METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
-      METAAPI_ACCOUNT_ID: ${{ secrets.METAAPI_ACCOUNT_ID }}
+      METAAPI_ACCOUNT_ID: ${{ github.event.inputs.account_id || secrets.METAAPI_ACCOUNT_ID }}
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       RUN_SOURCE: ${{ github.event_name == 'workflow_dispatch' && 'manual' || 'schedule' }}
       SYMBOL: ${{ vars.SYMBOL }}
