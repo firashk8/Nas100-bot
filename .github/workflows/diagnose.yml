@@ -1,0 +1,31 @@
+name: MetaApi check (read-only)
+
+# Manual only. Asks MetaApi for the trading account's status and last error.
+# Prints selected fields only: never the token, never a password.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
+      METAAPI_ACCOUNT_ID: ${{ secrets.METAAPI_ACCOUNT_ID }}
+    steps:
+      - name: Account status from MetaApi
+        run: |
+          set -u
+          if [ -z "${METAAPI_TOKEN}" ] || [ -z "${METAAPI_ACCOUNT_ID}" ]; then echo "Missing secrets"; exit 1; fi
+          echo "Token is set: yes (length ${#METAAPI_TOKEN}); account id length: ${#METAAPI_ACCOUNT_ID}"
+          BASE="https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${METAAPI_ACCOUNT_ID}"
+          code=$(curl -s -o acct.json -w "%{http_code}" -H "auth-token: ${METAAPI_TOKEN}" "$BASE")
+          echo "HTTP status from MetaApi: $code"
+          jq '{name, login, server, platform, type, region, reliability, state, connectionStatus, application, magic, resourceSlots, version, provisioningProfileId, primaryAccountId, accessRights, riskManagementApiEnabled, metastatsApiEnabled, allocateDedicatedIp, keywords}' acct.json 2>/dev/null || head -c 600 acct.json
+          echo "--- full keys returned (values hidden) ---"
+          jq -r 'keys[]' acct.json 2>/dev/null | tr '\n' ' '; echo
+          echo "--- any error / reason fields ---"
+          jq '[paths(scalars) as $p | {path: ($p|join(".")), value: getpath($p)} | select(.path|test("error|reason|message|status|state";"i"))]' acct.json 2>/dev/null
