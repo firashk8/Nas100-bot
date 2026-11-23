@@ -1,0 +1,49 @@
+name: MetaApi connect (set password + deploy)
+
+# Manual only. Sends the MT5 trading password stored in the MT_PASSWORD secret
+# straight to MetaApi (no phone keyboard involved), deploys the account and
+# waits for CONNECTED. Prints MetaApi's exact error code if it fails.
+# The password is never printed: it goes from the secret into a temp file.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  connect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
+      METAAPI_ACCOUNT_ID: ${{ secrets.METAAPI_ACCOUNT_ID }}
+      MT_PASSWORD: ${{ secrets.MT_PASSWORD }}
+    steps:
+      - name: Update password, deploy, wait for connection
+        run: |
+          set -u
+          if [ -z "${METAAPI_TOKEN}" ] || [ -z "${METAAPI_ACCOUNT_ID}" ]; then echo "Missing METAAPI secrets"; exit 1; fi
+          if [ -z "${MT_PASSWORD}" ]; then echo "Missing MT_PASSWORD secret"; exit 1; fi
+          echo "Password secret length: ${#MT_PASSWORD} characters (first/last char hidden)"
+          case "$MT_PASSWORD" in *" "*) echo "WARNING: the password contains a space";; esac
+          BASE="https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts/${METAAPI_ACCOUNT_ID}"
+          H=(-H "auth-token: ${METAAPI_TOKEN}" -H "Content-Type: application/json" -H "Accept: application/json")
+          curl -s "${H[@]}" "$BASE" -o acct.json
+          NAME=$(jq -r .name acct.json); SERVER=$(jq -r .server acct.json); STATE=$(jq -r .state acct.json)
+          echo "Account: $(jq -r .login acct.json) on $SERVER, state $STATE"
+          jq -n --arg p "$MT_PASSWORD" --arg n "$NAME" --arg s "$SERVER" '{password:$p, name:$n, server:$s, magic:0}' > body.json
+          code=$(curl -s -o put.json -w "%{http_code}" -X PUT "${H[@]}" -d @body.json "$BASE")
+          rm -f body.json
+          echo "Update password -> HTTP $code"
+          if [ "$code" != "204" ]; then echo "MetaApi says:"; jq '{error, message, details}' put.json 2>/dev/null || cat put.json; exit 1; fi
+          if [ "$STATE" = "DEPLOYED" ]; then ACTION=redeploy; else ACTION=deploy; fi
+          code=$(curl -s -o dep.json -w "%{http_code}" -X POST "${H[@]}" "$BASE/$ACTION")
+          echo "$ACTION -> HTTP $code"; [ "$code" = "204" ] || { jq . dep.json 2>/dev/null || cat dep.json; }
+          for i in $(seq 1 20); do
+            sleep 15
+            curl -s "${H[@]}" "$BASE" -o acct.json
+            st=$(jq -r .state acct.json); cs=$(jq -r .connectionStatus acct.json)
+            echo "t+$((i*15))s  state=$st  connection=$cs"
+            if [ "$cs" = "CONNECTED" ]; then echo "SUCCESS: MetaApi is connected to Exness."; exit 0; fi
+          done
+          echo "Not connected after 5 minutes."; exit 1
