@@ -1,1 +1,1 @@
-{"updated": "2026-11-23T09:52:06.997633+00:00", "state": "STOPPED", "message": "Armed. Trading starts automatically at 09:15 New York time.", "symbol": "USTECm", "checks": [], "positions": [], "log": ["Armed. Trading starts automatically at 09:15 New York time."]}
+{"updated": "2026-11-23T21:21:22.699595+00:00", "state": "STOPPED", "message": "NY session is over for today. Bot will start next trading day.", "symbol": "USTECm", "checks": [], "positions": [], "log": ["NY session is over for today. Bot will start next trading day."]}
