@@ -13,7 +13,7 @@ permissions:
 jobs:
   connect:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 14
     env:
       METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
       METAAPI_ACCOUNT_ID: ${{ secrets.METAAPI_ACCOUNT_ID }}
@@ -32,9 +32,13 @@ jobs:
           NAME=$(jq -r .name acct.json); SERVER=$(jq -r .server acct.json); STATE=$(jq -r .state acct.json)
           echo "Account: $(jq -r .login acct.json) on $SERVER, state $STATE"
           jq -n --arg p "$MT_PASSWORD" --arg n "$NAME" --arg s "$SERVER" '{password:$p, name:$n, server:$s, magic:0}' > body.json
-          code=$(curl -s -o put.json -w "%{http_code}" -X PUT "${H[@]}" -d @body.json "$BASE")
+          for try in 1 2 3 4 5 6; do
+            code=$(curl -s -o put.json -w "%{http_code}" -X PUT "${H[@]}" -d @body.json "$BASE")
+            echo "Update password (try $try) -> HTTP $code"
+            if [ "$code" != "202" ]; then break; fi
+            echo "  MetaApi is still checking the login with Exness, waiting 60 s..."; sleep 60
+          done
           rm -f body.json
-          echo "Update password -> HTTP $code"
           if [ "$code" != "204" ]; then echo "MetaApi says:"; jq '{error, message, details}' put.json 2>/dev/null || cat put.json; exit 1; fi
           if [ "$STATE" = "DEPLOYED" ]; then ACTION=redeploy; else ACTION=deploy; fi
           code=$(curl -s -o dep.json -w "%{http_code}" -X POST "${H[@]}" "$BASE/$ACTION")
