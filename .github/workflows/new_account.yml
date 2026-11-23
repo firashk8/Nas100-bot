@@ -1,0 +1,56 @@
+name: MetaApi add account fresh
+
+# Manual only. Adds the Exness MT5 account to MetaApi as a NEW entry, using the
+# broker name so MetaApi can find the server settings, then deploys it and waits
+# for CONNECTED. Uses MT_PASSWORD (never printed). Prints the new account id.
+on:
+  workflow_dispatch:
+    inputs:
+      login:
+        description: "MT5 login"
+        default: "473056926"
+      server:
+        description: "MT5 server"
+        default: "Exness-MT5Trial16"
+
+permissions:
+  contents: read
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      METAAPI_TOKEN: ${{ secrets.METAAPI_TOKEN }}
+      MT_PASSWORD: ${{ secrets.MT_PASSWORD }}
+      LOGIN: ${{ github.event.inputs.login }}
+      SERVER: ${{ github.event.inputs.server }}
+    steps:
+      - name: Create, deploy, wait
+        run: |
+          set -u
+          API="https://mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai/users/current/accounts"
+          TX=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+          H=(-H "auth-token: ${METAAPI_TOKEN}" -H "Content-Type: application/json" -H "Accept: application/json" -H "transaction-id: ${TX}")
+          jq -n --arg l "$LOGIN" --arg p "$MT_PASSWORD" --arg s "$SERVER" \
+            '{login:$l, password:$p, name:"Faroussa-bot", server:$s, platform:"mt5", magic:0, type:"cloud-g2", keywords:["Exness Technologies Ltd"]}' > body.json
+          ID=""
+          for try in $(seq 1 15); do
+            code=$(curl -s -o res.json -w "%{http_code}" -X POST "${H[@]}" -d @body.json "$API")
+            echo "Create (poll $try) -> HTTP $code"
+            if [ "$code" = "201" ]; then ID=$(jq -r .id res.json); break; fi
+            if [ "$code" != "202" ]; then echo "MetaApi says:"; jq '{error, message, details}' res.json 2>/dev/null || cat res.json; rm -f body.json; exit 1; fi
+            sleep 60
+          done
+          rm -f body.json
+          if [ -z "$ID" ]; then echo "Still validating after 15 minutes."; jq '{message}' res.json; exit 1; fi
+          echo "NEW_ACCOUNT_ID=$ID"
+          BASE="$API/$ID"; H2=(-H "auth-token: ${METAAPI_TOKEN}" -H "Accept: application/json")
+          for i in $(seq 1 16); do
+            sleep 15
+            curl -s "${H2[@]}" "$BASE" -o acct.json
+            echo "t+$((i*15))s state=$(jq -r .state acct.json) connection=$(jq -r .connectionStatus acct.json)"
+            [ "$(jq -r .connectionStatus acct.json)" = "CONNECTED" ] && { echo "SUCCESS: connected. NEW_ACCOUNT_ID=$ID"; exit 0; }
+            [ "$(jq -r .state acct.json)" = "UNDEPLOYED" ] && [ $i -eq 2 ] && curl -s -X POST "${H2[@]}" "$BASE/deploy" -o /dev/null
+          done
+          echo "Created ($ID) but not connected yet."; exit 1
