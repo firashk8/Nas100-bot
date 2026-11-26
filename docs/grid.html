@@ -229,15 +229,32 @@ async function gh(method, path, body, accept){
   return t ? JSON.parse(t) : {};
 }
 
-/* ---------------- read status ---------------- */
+/* ---------------- read status ----------------
+   With a token we use the API (always fresh). Without one, and on a public repo,
+   we fall back to raw.githubusercontent so the page still shows live numbers -
+   that read is CDN cached, so it can lag a few minutes. Buttons need the token. */
 async function load(){
+  if (TOKEN){
+    try {
+      S = await gh("GET", "/contents/grid_status.json?ref=status&t=" + Date.now(),
+                   null, "application/vnd.github.raw+json");
+      return;
+    } catch(e){
+      S = null;
+      $("sym").textContent = "no status yet — press START  (" + e.message.slice(0,38) + ")";
+      return;
+    }
+  }
   try {
-    S = await gh("GET", "/contents/grid_status.json?ref=status&t=" + Date.now(),
-                 null, "application/vnd.github.raw+json");
+    const r = await fetch(
+      `https://raw.githubusercontent.com/${REPO}/status/grid_status.json?t=` + Date.now(),
+      {cache:"no-store"});
+    if (!r.ok) throw new Error(r.status);
+    S = await r.json();
+    S._raw = true;
   } catch(e){
     S = null;
-    $("sym").textContent = TOKEN ? ("no status yet — press START  (" + e.message.slice(0,38) + ")")
-                                 : "add your GitHub token in settings";
+    $("sym").textContent = "waiting for the bot's first status — start it from the Actions tab";
   }
 }
 
@@ -253,7 +270,12 @@ function paint(){
   $("state").textContent = dead ? "STOPPED" : "RUNNING";
   $("state").style.color = dead ? "var(--muted)" : "var(--green)";
   const age = Math.round((Date.now() - new Date(S.time).getTime())/1000);
-  $("sym").textContent = `${S.symbol} · ${S.direction} · updated ${age}s ago`;
+  $("sym").textContent = `${S.symbol} · ${S.direction} · updated ${age}s ago`
+                       + (S._raw ? " · read-only, may lag" : "");
+  const noTok = !TOKEN;
+  $("btnStart").disabled = noTok; $("btnStop").disabled = noTok; $("btnFlat").disabled = noTok;
+  if (noTok) $("ctlNote").textContent =
+    "Add a GitHub token in settings to use these buttons. Until then start and stop the bot from the repo's Actions tab.";
 
   const net = S.net ?? 0;
   $("net").textContent = money(net);
