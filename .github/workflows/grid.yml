@@ -1,0 +1,75 @@
+name: Grid bot (Alpaca paper)
+
+# Runs the stacking bot from the video on a free Alpaca paper account.
+# Start it by hand from the Actions tab: Run workflow -> pick a symbol -> Run.
+# Crypto runs 24/7 so you can watch it tonight. GLD/IAU/QQQ only move in US hours.
+
+on:
+  workflow_dispatch:
+    inputs:
+      symbol:
+        description: "BTC/USD, ETH/USD (24/7) or GLD, IAU, QQQ (US hours)"
+        default: "BTC/USD"
+      direction:
+        description: "momentum, buy or sell"
+        default: "momentum"
+      notional:
+        description: "dollars per leg"
+        default: "500"
+      max_legs:
+        description: "how many stacked positions"
+        default: "4"
+      grid_step_pct:
+        description: "add a leg after price moves this % against"
+        default: "0.05"
+      take_profit_pct:
+        description: "each leg's own take profit, %"
+        default: "0.08"
+      basket_stop_pct:
+        description: "whole-stack stop as % of equity. 0 = none, like the video"
+        default: "0"
+      run_minutes:
+        description: "how long to run (max 330)"
+        default: "330"
+  schedule:
+    # 14:35 UTC = 09:35 New York, five minutes after the US open, weekdays.
+    # Only matters for GLD/IAU/QQQ. Harmless for crypto.
+    - cron: "35 14 * * 1-5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grid-bot
+  cancel-in-progress: false
+
+jobs:
+  grid:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+      ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+      ALPACA_PAPER: "true"
+      SYMBOL: ${{ github.event.inputs.symbol || 'BTC/USD' }}
+      DIRECTION: ${{ github.event.inputs.direction || 'momentum' }}
+      NOTIONAL: ${{ github.event.inputs.notional || '500' }}
+      MAX_LEGS: ${{ github.event.inputs.max_legs || '4' }}
+      GRID_STEP_PCT: ${{ github.event.inputs.grid_step_pct || '0.05' }}
+      TAKE_PROFIT_PCT: ${{ github.event.inputs.take_profit_pct || '0.08' }}
+      BASKET_STOP_PCT: ${{ github.event.inputs.basket_stop_pct || '0' }}
+      RUN_MINUTES: ${{ github.event.inputs.run_minutes || '330' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run the grid bot
+        run: python3 grid_bot.py
+      - name: Upload the session log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: grid-status
+          path: grid_status.json
+          if-no-files-found: ignore
