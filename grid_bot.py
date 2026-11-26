@@ -37,6 +37,7 @@ RUN IT:
 Stdlib only. No pip install.
 """
 
+import base64
 import json
 import os
 import sys
@@ -80,8 +81,73 @@ HEAD = {
 }
 
 
+GH_TOKEN = env("GITHUB_TOKEN", "")
+GH_REPO = env("GITHUB_REPOSITORY", "")
+STATUS_BRANCH = env("STATUS_BRANCH", "status")
+STATUS_PATH = env("STATUS_PATH", "grid_status.json")
+
+
 def log(msg):
     print(f"[{datetime.now(timezone.utc).strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+def gh(method, path, body=None):
+    url = f"https://api.github.com/repos/{GH_REPO}{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={
+        "Authorization": f"Bearer {GH_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "grid-bot",
+    })
+    with urllib.request.urlopen(req, timeout=20) as r:
+        raw = r.read().decode()
+        return json.loads(raw) if raw else {}
+
+
+_sha = {"v": None}
+
+
+def publish(payload):
+    """Push live status to the `status` branch so the dashboard can read it."""
+    if not GH_TOKEN or not GH_REPO:
+        return
+    try:
+        try:
+            gh("GET", f"/git/ref/heads/{STATUS_BRANCH}")
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+            base = gh("GET", f"/git/ref/heads/{gh('GET', '')['default_branch']}")
+            gh("POST", "/git/refs", {"ref": f"refs/heads/{STATUS_BRANCH}",
+                                     "sha": base["object"]["sha"]})
+        if _sha["v"] is None:
+            try:
+                _sha["v"] = gh("GET", f"/contents/{STATUS_PATH}?ref={STATUS_BRANCH}")["sha"]
+            except Exception:
+                _sha["v"] = ""
+        body = {
+            "message": "grid status",
+            "content": base64.b64encode(json.dumps(payload, indent=1).encode()).decode(),
+            "branch": STATUS_BRANCH,
+        }
+        if _sha["v"]:
+            body["sha"] = _sha["v"]
+        _sha["v"] = gh("PUT", f"/contents/{STATUS_PATH}", body)["content"]["sha"]
+    except Exception as e:
+        log(f"status publish failed: {str(e)[:120]}")
+        _sha["v"] = None
+
+
+def read_control():
+    """Let the dashboard stop the bot mid-run by flipping grid_control.json."""
+    if not GH_TOKEN or not GH_REPO:
+        return {}
+    try:
+        r = gh("GET", f"/contents/grid_control.json?ref={STATUS_BRANCH}")
+        return json.loads(base64.b64decode(r["content"]).decode())
+    except Exception:
+        return {}
 
 
 def call(method, url, body=None, tries=3):
@@ -286,18 +352,50 @@ def main():
                             for l in legs) if legs else 0.0
                 log(f"{SYMBOL} {mid:.2f} | legs {len(legs)} | floating ${floating:+.2f} "
                     f"| worst leg {worst:+.2f}% | realized ${realized:+.2f} | {wins}W/{losses}L")
+                eq_now = equity()
+                snap = {
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "state": "RUNNING",
+                    "symbol": SYMBOL, "price": round(mid, 2), "bid": round(bid, 2), "ask": round(ask, 2),
+                    "open_legs": len(legs), "max_legs": MAX_LEGS,
+                    "floating": round(floating, 2), "realized": round(realized, 2),
+                    "net": round(realized + floating, 2),
+                    "worst_leg_pct": round(worst, 3),
+                    "wins": wins, "losses": losses, "legs_opened": opened,
+                    "win_rate": round(100.0 * wins / opened, 1) if opened else 0.0,
+                    "equity": round(eq_now, 2), "start_equity": round(acct_start, 2),
+                    "drawdown_pct": round(100.0 * (acct_start - eq_now) / acct_start, 2) if acct_start else 0.0,
+                    "basket_stop_pct": BASKET_STOP_PCT,
+                    "notional": NOTIONAL, "grid_step_pct": GRID_STEP_PCT,
+                    "take_profit_pct": TAKE_PROFIT_PCT, "direction": DIRECTION,
+                    "seconds_left": int(max(0, deadline - time.time())),
+                    "legs": [{
+                        "n": l["n"], "side": l["side"], "entry": round(l["entry"], 2),
+                        "tp": round(l["tp"], 2), "qty": l["qty"],
+                        "pnl": round((( bid if l["side"] == "buy" else ask) - l["entry"])
+                                     * l["qty"] * (1 if l["side"] == "buy" else -1), 2),
+                        "pct": round((((bid if l["side"] == "buy" else ask) - l["entry"])
+                                      * (1 if l["side"] == "buy" else -1) / l["entry"] * 100), 3),
+                    } for l in legs],
+                }
                 try:
                     with open(STATUS_FILE, "w") as f:
-                        json.dump({
-                            "time": datetime.now(timezone.utc).isoformat(),
-                            "symbol": SYMBOL, "price": mid, "open_legs": len(legs),
-                            "floating": round(floating, 2), "realized": round(realized, 2),
-                            "wins": wins, "losses": losses, "legs_opened": opened,
-                            "equity": equity(), "start_equity": acct_start,
-                            "basket_stop_pct": BASKET_STOP_PCT,
-                        }, f, indent=2)
+                        json.dump(snap, f, indent=2)
                 except Exception:
                     pass
+                publish(snap)
+
+                ctl = read_control()
+                if ctl.get("stop"):
+                    close_everything(legs, "stopped from the dashboard")
+                    realized += floating
+                    snap["state"] = "STOPPED"
+                    publish(snap)
+                    log("stop requested from the dashboard - closing and exiting")
+                    break
+                if ctl.get("flatten"):
+                    close_everything(legs, "flatten requested from the dashboard")
+                    realized += floating
 
             time.sleep(POLL_SECONDS)
 

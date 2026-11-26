@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a1230">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Grid Control</title>
+<style>
+  :root{
+    --bg:#05070f; --bar:#0a1230; --card:#0c1226; --card2:#0f1730; --line:#1b2547;
+    --text:#e8edff; --muted:#7d89b3; --dim:#4d5881;
+    --cyan:#22e3d3; --green:#2ee59d; --red:#ff3d6e; --amber:#ffb02e; --blue:#3d7bff; --gold:#e8c86a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{background:var(--bg);color:var(--text);
+       font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding-bottom:48px}
+  .num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+  header{position:sticky;top:0;z-index:20;backdrop-filter:blur(14px);
+         background:linear-gradient(180deg,rgba(16,28,78,.96),rgba(10,18,48,.92));
+         padding:calc(env(safe-area-inset-top) + 13px) 16px 13px;display:flex;align-items:center;gap:11px;
+         border-bottom:1px solid #1d2b66}
+  header h1{font-size:17px;font-weight:650;letter-spacing:.2px}
+  header small{display:block;color:var(--muted);font-size:11.5px;margin-top:1px}
+  .sp{flex:1}
+  .icon{background:none;border:0;color:var(--text);font-size:19px;padding:7px;border-radius:9px}
+  .icon:active{background:#18224a}
+  main{padding:14px;display:grid;gap:13px;max-width:560px;margin:0 auto}
+  .card{background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);
+        border-radius:17px;padding:15px;box-shadow:0 1px 0 rgba(255,255,255,.03) inset}
+  .ttl{font-size:11px;letter-spacing:1.3px;text-transform:uppercase;color:var(--muted);
+       font-weight:650;display:flex;align-items:center;gap:7px;margin-bottom:11px}
+  .ttl .sp{flex:1}
+  .pill{font-size:10.5px;font-weight:750;letter-spacing:.9px;padding:4px 9px;border-radius:999px;
+        border:1px solid currentColor;text-transform:uppercase}
+  .ok{color:var(--green)} .bad{color:var(--red)} .wait{color:var(--muted)} .warn{color:var(--amber)}
+  .hero{text-align:center;padding:19px 15px 17px}
+  .hero .state{font-size:27px;font-weight:800;letter-spacing:1px}
+  .hero .sym{color:var(--muted);font-size:13px;margin-top:4px}
+  .big{font-size:42px;font-weight:800;letter-spacing:-1.2px;line-height:1.05;margin:13px 0 3px}
+  .cap{font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);font-weight:650}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:14px}
+  .mini{background:#0a0f22;border:1px solid var(--line);border-radius:12px;padding:10px 11px}
+  .mini .k{font-size:10px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);font-weight:650}
+  .mini .v{font-size:19px;font-weight:750;margin-top:3px}
+  .row{display:flex;justify-content:space-between;align-items:center;padding:9px 0;
+       border-bottom:1px solid rgba(27,37,71,.6);font-size:14px}
+  .row:last-child{border-bottom:0}
+  .row span:first-child{color:var(--muted)}
+  .row b{font-weight:650}
+  .bar{height:7px;background:#0a0f22;border-radius:99px;overflow:hidden;margin-top:9px;
+       border:1px solid var(--line)}
+  .bar i{display:block;height:100%;border-radius:99px;transition:width .5s ease}
+  .leg{display:grid;grid-template-columns:34px 1fr auto;gap:10px;align-items:center;
+       padding:10px 0;border-bottom:1px solid rgba(27,37,71,.6)}
+  .leg:last-child{border-bottom:0}
+  .tag{font-size:10px;font-weight:800;text-align:center;padding:5px 0;border-radius:7px;letter-spacing:.4px}
+  .tag.b{background:rgba(46,229,157,.14);color:var(--green)}
+  .tag.s{background:rgba(255,61,110,.14);color:var(--red)}
+  .leg .e{font-size:13px;font-weight:600}
+  .leg .m{font-size:11px;color:var(--dim);margin-top:1px}
+  .leg .p{text-align:right;font-weight:750;font-size:15px}
+  .leg .pp{text-align:right;font-size:11px;color:var(--dim);margin-top:1px}
+  .btns{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  button.act{border:0;border-radius:13px;padding:15px;font-size:15px;font-weight:700;color:#04101e;
+              letter-spacing:.3px}
+  button.act:disabled{opacity:.35}
+  .start{background:linear-gradient(135deg,#2ee59d,#22e3d3)}
+  .stop{background:linear-gradient(135deg,#ff3d6e,#ff7a4d)}
+  .flat{background:#18224a;color:var(--text);border:1px solid #27356e}
+  .wide{grid-column:1 / -1}
+  .note{font-size:12px;color:var(--dim);margin-top:11px;line-height:1.5}
+  .empty{text-align:center;color:var(--dim);font-size:13px;padding:22px 8px}
+  .sheet{position:fixed;inset:0;z-index:40;background:rgba(2,4,12,.72);backdrop-filter:blur(5px);
+         display:none;align-items:flex-end}
+  .sheet.show{display:flex}
+  .sheet .inner{background:var(--card);border-top-left-radius:22px;border-top-right-radius:22px;
+                border-top:1px solid var(--line);padding:20px 17px calc(env(safe-area-inset-bottom) + 22px);
+                width:100%;max-width:560px;margin:0 auto;max-height:90vh;overflow:auto}
+  .field{margin:13px 0}
+  .field label{display:block;font-size:11px;letter-spacing:.9px;text-transform:uppercase;
+               color:var(--muted);font-weight:650;margin-bottom:6px}
+  .field input,.field select{width:100%;background:#070b18;border:1px solid var(--line);border-radius:11px;
+               padding:13px;color:var(--text);font-size:15px;font-family:inherit}
+  .g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .spark{width:100%;height:46px;display:block;margin-top:10px}
+  .flash{animation:fl .5s ease}
+  @keyframes fl{0%{background:#18224a}100%{background:transparent}}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Grid Control</h1>
+    <small id="repoLbl">—</small>
+  </div>
+  <div class="sp"></div>
+  <button class="icon" id="btnRef" title="Refresh">⟳</button>
+  <button class="icon" id="btnSet" title="Settings">⚙</button>
+</header>
+
+<main>
+
+  <!-- state -->
+  <section class="card hero">
+    <div class="state" id="state">NOT CONNECTED</div>
+    <div class="sym" id="sym">add your GitHub token in settings</div>
+    <div class="big num" id="net">—</div>
+    <div class="cap">net profit and loss</div>
+    <div class="split">
+      <div class="mini"><div class="k">Closed</div><div class="v num ok" id="realized">—</div></div>
+      <div class="mini"><div class="k">Still open</div><div class="v num" id="floating">—</div></div>
+    </div>
+    <svg class="spark" id="spark" viewBox="0 0 300 46" preserveAspectRatio="none"></svg>
+  </section>
+
+  <!-- risk: the number the video never shows -->
+  <section class="card">
+    <div class="ttl">Risk on the open stack <span class="sp"></span>
+      <span class="pill bad" id="stopPill">no stop loss</span></div>
+    <div class="row"><span>Floating loss</span><b class="num" id="rFloat">—</b></div>
+    <div class="row"><span>Worst leg</span><b class="num" id="rWorst">—</b></div>
+    <div class="row"><span>Account drawdown</span><b class="num" id="rDD">—</b></div>
+    <div class="bar"><i id="rBar" style="width:0%;background:var(--green)"></i></div>
+    <div class="note" id="rNote">This bar fills as the open stack loses. With no stop loss it has
+      nothing to stop at — that is how the bot in the video is built.</div>
+  </section>
+
+  <!-- the stack -->
+  <section class="card">
+    <div class="ttl">Open legs <span class="sp"></span><span class="pill wait" id="legPill">0 / 0</span></div>
+    <div id="legs"><div class="empty">Nothing open.</div></div>
+  </section>
+
+  <!-- scoreboard -->
+  <section class="card">
+    <div class="ttl">Scoreboard</div>
+    <div class="row"><span>Win rate</span><b class="num" id="sWin">—</b></div>
+    <div class="row"><span>Legs closed in profit</span><b class="num" id="sWins">—</b></div>
+    <div class="row"><span>Legs opened</span><b class="num" id="sOpened">—</b></div>
+    <div class="row"><span>Equity</span><b class="num" id="sEq">—</b></div>
+    <div class="row"><span>Price</span><b class="num" id="sPx">—</b></div>
+    <div class="row"><span>Time left this session</span><b class="num" id="sLeft">—</b></div>
+    <div class="note">A high win rate here is not the same as making money. On 16,662 real BTC
+      bars this bot closed 98.0% of its legs in profit and the account still ended down 59%,
+      because the losing legs never close — they sit in the section above.</div>
+  </section>
+
+  <!-- controls -->
+  <section class="card">
+    <div class="ttl">Controls</div>
+    <div class="btns">
+      <button class="act start" id="btnStart">START</button>
+      <button class="act stop" id="btnStop">STOP</button>
+      <button class="act flat wide" id="btnFlat">CLOSE ALL LEGS NOW</button>
+    </div>
+    <div class="note" id="ctlNote">START launches the workflow with the settings below.
+      STOP closes everything and ends the run.</div>
+  </section>
+
+</main>
+
+<!-- settings -->
+<div class="sheet" id="sheet"><div class="inner">
+  <div class="ttl">Settings</div>
+  <div class="field"><label>Repository</label>
+    <input id="inRepo" placeholder="firashk8/Nas100-bot" autocapitalize="off" spellcheck="false"></div>
+  <div class="field"><label>GitHub token (fine-grained, this repo only)</label>
+    <input id="inTok" type="password" placeholder="github_pat_…" autocapitalize="off" spellcheck="false"></div>
+  <div class="note">The token stays on this phone only. It needs Actions: read and write,
+    and Contents: read and write.</div>
+
+  <div class="ttl" style="margin-top:20px">Bot settings</div>
+  <div class="field"><label>Symbol</label>
+    <select id="inSym">
+      <option value="BTC/USD">BTC/USD — crypto, trades 24/7</option>
+      <option value="ETH/USD">ETH/USD — crypto, trades 24/7</option>
+      <option value="GLD">GLD — gold ETF, US hours</option>
+      <option value="IAU">IAU — gold ETF, US hours</option>
+      <option value="QQQ">QQQ — Nasdaq 100 ETF, US hours</option>
+    </select></div>
+  <div class="g2">
+    <div class="field"><label>Direction</label>
+      <select id="inDir"><option value="momentum">momentum</option>
+        <option value="buy">buy only</option><option value="sell">sell only</option></select></div>
+    <div class="field"><label>$ per leg</label><input id="inNot" type="number" value="500"></div>
+  </div>
+  <div class="g2">
+    <div class="field"><label>Max legs</label><input id="inLegs" type="number" value="4"></div>
+    <div class="field"><label>Grid step %</label><input id="inStep" type="number" step="0.01" value="0.05"></div>
+  </div>
+  <div class="g2">
+    <div class="field"><label>Take profit %</label><input id="inTp" type="number" step="0.01" value="0.08"></div>
+    <div class="field"><label>Basket stop % (0 = none)</label><input id="inStop" type="number" step="1" value="0"></div>
+  </div>
+  <button class="act start wide" id="btnSave" style="margin-top:8px">SAVE</button>
+</div></div>
+
+<script>
+const mem = {};
+const store = {
+  get(k){ try { return localStorage.getItem(k) || ""; } catch(e){ return mem[k] || ""; } },
+  set(k,v){ try { localStorage.setItem(k,v); } catch(e){ mem[k]=v; } }
+};
+const $ = id => document.getElementById(id);
+const money = v => (v<0?"-":"+") + "$" + Math.abs(v).toFixed(2);
+const plain = v => "$" + Number(v).toFixed(2);
+
+let REPO  = store.get("grepo") || "firashk8/Nas100-bot";
+let TOKEN = store.get("gtok");
+let CFG = JSON.parse(store.get("gcfg") || "{}");
+let S = null, busy = false;
+
+async function gh(method, path, body, accept){
+  if (!TOKEN) throw new Error("no token");
+  const r = await fetch(`https://api.github.com/repos/${REPO}${path}`, {
+    method,
+    headers: {
+      "Authorization": "Bearer " + TOKEN,
+      "Accept": accept || "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28"
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  if (r.status === 204) return {};
+  if (!r.ok) throw new Error(r.status + " " + (await r.text()).slice(0,140));
+  const t = await r.text();
+  return t ? JSON.parse(t) : {};
+}
+
+/* ---------------- read status ---------------- */
+async function load(){
+  try {
+    S = await gh("GET", "/contents/grid_status.json?ref=status&t=" + Date.now(),
+                 null, "application/vnd.github.raw+json");
+  } catch(e){
+    S = null;
+    $("sym").textContent = TOKEN ? ("no status yet — press START  (" + e.message.slice(0,38) + ")")
+                                 : "add your GitHub token in settings";
+  }
+}
+
+function stale(){
+  if (!S || !S.time) return true;
+  return (Date.now() - new Date(S.time).getTime()) > 150000;  // 2.5 min
+}
+
+/* ---------------- paint ---------------- */
+function paint(){
+  if (!S){ $("state").textContent = TOKEN ? "STOPPED" : "NOT CONNECTED"; return; }
+  const dead = stale() || S.state === "STOPPED";
+  $("state").textContent = dead ? "STOPPED" : "RUNNING";
+  $("state").style.color = dead ? "var(--muted)" : "var(--green)";
+  const age = Math.round((Date.now() - new Date(S.time).getTime())/1000);
+  $("sym").textContent = `${S.symbol} · ${S.direction} · updated ${age}s ago`;
+
+  const net = S.net ?? 0;
+  $("net").textContent = money(net);
+  $("net").style.color = net > 0 ? "var(--green)" : net < 0 ? "var(--red)" : "var(--text)";
+  $("realized").textContent = money(S.realized ?? 0);
+  $("realized").style.color = (S.realized ?? 0) >= 0 ? "var(--green)" : "var(--red)";
+  $("floating").textContent = money(S.floating ?? 0);
+  $("floating").style.color = (S.floating ?? 0) >= 0 ? "var(--green)" : "var(--red)";
+
+  // risk
+  const fl = S.floating ?? 0;
+  $("rFloat").textContent = money(fl);
+  $("rFloat").style.color = fl < 0 ? "var(--red)" : "var(--green)";
+  $("rWorst").textContent = (S.worst_leg_pct ?? 0).toFixed(2) + "%";
+  $("rWorst").style.color = (S.worst_leg_pct ?? 0) < 0 ? "var(--red)" : "var(--text)";
+  $("rDD").textContent = (S.drawdown_pct ?? 0).toFixed(2) + "%";
+  $("rDD").style.color = (S.drawdown_pct ?? 0) > 0 ? "var(--red)" : "var(--green)";
+
+  const hasStop = (S.basket_stop_pct ?? 0) > 0;
+  $("stopPill").textContent = hasStop ? ("stop at -" + S.basket_stop_pct + "%") : "no stop loss";
+  $("stopPill").className = "pill " + (hasStop ? "ok" : "bad");
+  const eq0 = S.start_equity || 1;
+  const lossPct = Math.max(0, -fl / eq0 * 100);
+  const limit = hasStop ? S.basket_stop_pct : 25;
+  const frac = Math.min(100, lossPct / limit * 100);
+  $("rBar").style.width = frac + "%";
+  $("rBar").style.background = frac > 66 ? "var(--red)" : frac > 33 ? "var(--amber)" : "var(--green)";
+  $("rNote").textContent = hasStop
+    ? `The stack is ${lossPct.toFixed(2)}% of equity under water. It closes at ${S.basket_stop_pct}%.`
+    : `The stack is ${lossPct.toFixed(2)}% of equity under water, and nothing closes it. The bar is scaled to 25% for reference only.`;
+
+  // legs
+  const legs = S.legs || [];
+  $("legPill").textContent = `${legs.length} / ${S.max_legs ?? 0}`;
+  $("legPill").className = "pill " + (legs.length >= (S.max_legs||99) ? "warn" : "wait");
+  $("legs").innerHTML = legs.length ? legs.map(l => `
+    <div class="leg">
+      <div class="tag ${l.side === 'buy' ? 'b' : 's'}">${l.side === 'buy' ? 'BUY' : 'SELL'}</div>
+      <div><div class="e num">${l.entry}</div><div class="m num">leg ${l.n} · target ${l.tp}</div></div>
+      <div><div class="p num" style="color:${l.pnl>=0?'var(--green)':'var(--red)'}">${money(l.pnl)}</div>
+           <div class="pp num">${l.pct>=0?'+':''}${l.pct.toFixed(2)}%</div></div>
+    </div>`).join("") : '<div class="empty">Nothing open.</div>';
+
+  // scoreboard
+  $("sWin").textContent = (S.win_rate ?? 0).toFixed(1) + "%";
+  $("sWin").style.color = "var(--gold)";
+  $("sWins").textContent = `${S.wins ?? 0}`;
+  $("sOpened").textContent = `${S.legs_opened ?? 0}`;
+  $("sEq").textContent = plain(S.equity ?? 0);
+  $("sPx").textContent = (S.price ?? 0).toLocaleString();
+  const sec = S.seconds_left ?? 0;
+  $("sLeft").textContent = dead ? "—" : `${Math.floor(sec/3600)}h ${Math.floor(sec%3600/60)}m`;
+
+  history(S.equity);
+}
+
+/* ---------------- equity sparkline ---------------- */
+function history(eq){
+  if (!eq) return;
+  let h = [];
+  try { h = JSON.parse(store.get("ghist") || "[]"); } catch(e){}
+  if (!h.length || Math.abs(h[h.length-1] - eq) > 0.004) h.push(eq);
+  if (h.length > 160) h = h.slice(-160);
+  store.set("ghist", JSON.stringify(h));
+  if (h.length < 2){ $("spark").innerHTML = ""; return; }
+  const lo = Math.min(...h), hi = Math.max(...h), rng = (hi - lo) || 1;
+  const pts = h.map((v,i) => `${(i/(h.length-1))*300},${44 - ((v-lo)/rng)*40}`).join(" ");
+  const up = h[h.length-1] >= h[0];
+  const c = up ? "#2ee59d" : "#ff3d6e";
+  $("spark").innerHTML =
+    `<polyline points="${pts}" fill="none" stroke="${c}" stroke-width="1.8"
+       stroke-linejoin="round" stroke-linecap="round" opacity=".95"/>`;
+}
+
+/* ---------------- controls ---------------- */
+async function setControl(obj, msg){
+  let sha = null;
+  try { sha = (await gh("GET","/contents/grid_control.json?ref=status")).sha; } catch(e){}
+  const body = { message: msg, branch: "status",
+                 content: btoa(JSON.stringify(obj)) };
+  if (sha) body.sha = sha;
+  await gh("PUT", "/contents/grid_control.json", body);
+}
+
+async function act(fn, label){
+  if (busy) return;
+  busy = true;
+  const note = $("ctlNote"); const old = note.textContent;
+  note.textContent = label + "…";
+  try { await fn(); note.textContent = label + " sent."; }
+  catch(e){ note.textContent = "Failed: " + e.message.slice(0,110); }
+  busy = false;
+  setTimeout(()=>{ note.textContent = old; }, 6000);
+  tick();
+}
+
+$("btnStart").onclick = () => act(async () => {
+  await setControl({stop:false, flatten:false}, "clear grid control");
+  const repo = await gh("GET","");
+  await gh("POST", "/actions/workflows/grid.yml/dispatches", {
+    ref: repo.default_branch,
+    inputs: {
+      symbol: CFG.sym || "BTC/USD",
+      direction: CFG.dir || "momentum",
+      notional: String(CFG.not || 500),
+      max_legs: String(CFG.legs || 4),
+      grid_step_pct: String(CFG.step ?? 0.05),
+      take_profit_pct: String(CFG.tp ?? 0.08),
+      basket_stop_pct: String(CFG.stop ?? 0),
+      run_minutes: "330"
+    }
+  });
+}, "START");
+
+$("btnStop").onclick  = () => act(() => setControl({stop:true},  "stop grid bot"), "STOP");
+$("btnFlat").onclick  = () => act(() => setControl({flatten:true}, "flatten grid legs"), "CLOSE ALL");
+$("btnRef").onclick   = () => tick();
+
+/* ---------------- settings ---------------- */
+function openSheet(){
+  $("inRepo").value = REPO; $("inTok").value = TOKEN;
+  $("inSym").value = CFG.sym || "BTC/USD";
+  $("inDir").value = CFG.dir || "momentum";
+  $("inNot").value = CFG.not ?? 500;
+  $("inLegs").value = CFG.legs ?? 4;
+  $("inStep").value = CFG.step ?? 0.05;
+  $("inTp").value = CFG.tp ?? 0.08;
+  $("inStop").value = CFG.stop ?? 0;
+  $("sheet").classList.add("show");
+}
+$("btnSet").onclick = openSheet;
+$("sheet").onclick = e => { if (e.target.id === "sheet") $("sheet").classList.remove("show"); };
+$("btnSave").onclick = () => {
+  REPO = $("inRepo").value.trim() || REPO;
+  TOKEN = $("inTok").value.trim();
+  CFG = { sym:$("inSym").value, dir:$("inDir").value, not:+$("inNot").value,
+          legs:+$("inLegs").value, step:+$("inStep").value, tp:+$("inTp").value,
+          stop:+$("inStop").value };
+  store.set("grepo", REPO); store.set("gtok", TOKEN); store.set("gcfg", JSON.stringify(CFG));
+  $("repoLbl").textContent = REPO;
+  $("sheet").classList.remove("show");
+  tick();
+};
+
+async function tick(){ await load(); paint(); }
+$("repoLbl").textContent = REPO;
+tick();
+setInterval(tick, 20000);
+</script>
+</body>
+</html>

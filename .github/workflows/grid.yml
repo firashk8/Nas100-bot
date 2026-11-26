@@ -37,7 +37,7 @@ on:
     - cron: "35 14 * * 1-5"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: grid-bot
@@ -51,6 +51,8 @@ jobs:
       ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
       ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
       ALPACA_PAPER: "true"
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
       SYMBOL: ${{ github.event.inputs.symbol || 'BTC/USD' }}
       DIRECTION: ${{ github.event.inputs.direction || 'momentum' }}
       NOTIONAL: ${{ github.event.inputs.notional || '500' }}
