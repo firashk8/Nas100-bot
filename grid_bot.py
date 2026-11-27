@@ -39,6 +39,7 @@ Stdlib only. No pip install.
 
 import base64
 import json
+import math
 import os
 import sys
 import time
@@ -239,6 +240,19 @@ def size_for(px):
     return round(qty, 6) if IS_CRYPTO else max(1, int(qty))
 
 
+def held_qty():
+    """How much of the asset the account actually holds right now.
+    Crypto fees are taken IN the asset: buy 0.1667 BTC and you receive slightly less.
+    Trying to sell the full leg size then fails with 'insufficient balance', the close
+    is rejected, and the leg is stuck open forever. So cap every sell at what is there."""
+    try:
+        sym = SYMBOL.replace("/", "") if IS_CRYPTO else SYMBOL
+        p = call("GET", f"{TRADE_HOST}/v2/positions/{urllib.parse.quote(sym, safe='')}")
+        return abs(float(p.get("qty_available") or p.get("qty") or 0))
+    except Exception:
+        return 0.0
+
+
 def buying_power():
     a = call("GET", f"{TRADE_HOST}/v2/account")
     return float(a.get("non_marginable_buying_power") if IS_CRYPTO else a.get("buying_power", 0))
@@ -302,6 +316,7 @@ def main():
     deadline = time.time() + RUN_MINUTES * 60
     last_status = 0.0
     last_err = 0.0
+    opened_stuck = []
 
     while time.time() < deadline:
         try:
@@ -320,9 +335,17 @@ def main():
                 won = px >= leg["tp"] if up else px <= leg["tp"]
                 lost = bool(leg.get("sl")) and (px <= leg["sl"] if up else px >= leg["sl"])
                 if won or lost:
-                    gain = (px - leg["entry"]) * leg["qty"] * (1 if up else -1)
+                    qty = leg["qty"]
+                    if up:                                   # selling: never ask for more than we hold
+                        have = held_qty()
+                        qty = min(qty, math.floor(have * 1e6) / 1e6) if IS_CRYPTO else min(qty, int(have))
+                    gain = (px - leg["entry"]) * qty * (1 if up else -1)
+                    if qty <= 0:
+                        log(f"  leg {leg['n']} cannot close: nothing held. dropping it.")
+                        opened_stuck.append(leg["n"])
+                        continue
                     try:
-                        submit("sell" if up else "buy", leg["qty"])
+                        submit("sell" if up else "buy", qty)
                         realized += gain
                         if won:
                             wins += 1
@@ -409,6 +432,7 @@ def main():
                     "fees_and_slippage": round((realized + floating) - (eq_now - acct_start), 2),
                     "worst_leg_pct": round(worst, 3),
                     "wins": wins, "losses": losses, "legs_opened": opened,
+                    "stuck_legs": len(opened_stuck),
                     "win_rate": round(100.0 * wins / opened, 1) if opened else 0.0,
                     "equity": round(eq_now, 2), "start_equity": round(acct_start, 2),
                     "drawdown_pct": round(100.0 * (acct_start - eq_now) / acct_start, 2) if acct_start else 0.0,
@@ -461,6 +485,7 @@ def main():
                     "open_legs": len(legs), "floating": 0.0, "realized": round(realized, 2),
                     "net": round(realized, 2), "worst_leg_pct": 0.0,
                     "wins": wins, "losses": losses, "legs_opened": opened,
+                    "stuck_legs": len(opened_stuck),
                     "win_rate": round(100.0 * wins / opened, 1) if opened else 0.0,
                     "equity": acct_start, "start_equity": acct_start,
                     "drawdown_pct": 0.0, "basket_stop_pct": BASKET_STOP_PCT,
