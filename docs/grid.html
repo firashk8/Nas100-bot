@@ -137,14 +137,18 @@
   <section class="card">
     <div class="ttl">Scoreboard</div>
     <div class="row"><span>Win rate</span><b class="num" id="sWin">—</b></div>
-    <div class="row"><span>Legs closed in profit</span><b class="num" id="sWins">—</b></div>
+    <div class="row"><span>Legs closed in profit</span><b class="num ok" id="sWins">—</b></div>
+    <div class="row"><span>Legs closed at a loss</span><b class="num bad" id="sLoss">—</b></div>
     <div class="row"><span>Legs opened</span><b class="num" id="sOpened">—</b></div>
     <div class="row"><span>Equity</span><b class="num" id="sEq">—</b></div>
     <div class="row"><span>Price</span><b class="num" id="sPx">—</b></div>
     <div class="row"><span>Time left this session</span><b class="num" id="sLeft">—</b></div>
     <div class="note">A high win rate here is not the same as making money. On 16,662 real BTC
       bars this bot closed 98.0% of its legs in profit and the account still ended down 59%,
-      because the losing legs never close — they sit in the section above.</div>
+      because the losing legs never close — they sit in the section above.
+      With a stop loss set, every leg closes and this win rate becomes a real one:
+      expect it near 50%, because win rate is set by the ratio of target to stop,
+      not by skill.</div>
   </section>
 
   <!-- controls -->
@@ -192,7 +196,12 @@
   </div>
   <div class="g2">
     <div class="field"><label>Take profit %</label><input id="inTp" type="number" step="0.01" value="0.08"></div>
+    <div class="field"><label>Stop loss % per leg</label><input id="inSl" type="number" step="0.01" value="0.08"></div>
+  </div>
+  <div class="g2">
     <div class="field"><label>Basket stop % (0 = none)</label><input id="inStop" type="number" step="1" value="0"></div>
+    <div class="field"><label></label><div style="font-size:11px;color:var(--dim);padding:10px 0">
+      Stop loss 0 = the video. Any other value makes every leg close, so the win rate is real.</div></div>
   </div>
   <button class="act start wide" id="btnSave" style="margin-top:8px">SAVE</button>
 </div></div>
@@ -336,6 +345,8 @@ function paint(){
   $("sWin").textContent = (S.win_rate ?? 0).toFixed(1) + "%";
   $("sWin").style.color = "var(--gold)";
   $("sWins").textContent = `${S.wins ?? 0}`;
+  $("sLoss").textContent = `${S.losses ?? 0}`;
+  $("sWin").style.color = (S.stop_loss_pct ?? 0) > 0 ? "var(--gold)" : "var(--dim)";
   $("sOpened").textContent = `${S.legs_opened ?? 0}`;
   $("sEq").textContent = plain(S.equity ?? 0);
   $("sPx").textContent = (S.price ?? 0).toLocaleString();
@@ -397,6 +408,7 @@ $("btnStart").onclick = () => act(async () => {
       max_legs: String(CFG.legs || 4),
       grid_step_pct: String(CFG.step ?? 0.05),
       take_profit_pct: String(CFG.tp ?? 0.08),
+      stop_loss_pct: String(CFG.sl ?? 0.08),
       basket_stop_pct: String(CFG.stop ?? 0),
       run_minutes: "330"
     }
@@ -416,6 +428,7 @@ function openSheet(){
   $("inLegs").value = CFG.legs ?? 4;
   $("inStep").value = CFG.step ?? 0.05;
   $("inTp").value = CFG.tp ?? 0.08;
+  $("inSl").value = CFG.sl ?? 0.08;
   $("inStop").value = CFG.stop ?? 0;
   $("sheet").classList.add("show");
 }
@@ -426,7 +439,7 @@ $("btnSave").onclick = () => {
   TOKEN = $("inTok").value.trim();
   CFG = { sym:$("inSym").value, dir:$("inDir").value, not:+$("inNot").value,
           legs:+$("inLegs").value, step:+$("inStep").value, tp:+$("inTp").value,
-          stop:+$("inStop").value };
+          sl:+$("inSl").value, stop:+$("inStop").value };
   store.set("grepo", REPO); store.set("gtok", TOKEN); store.set("gcfg", JSON.stringify(CFG));
   $("repoLbl").textContent = REPO;
   $("sheet").classList.remove("show");

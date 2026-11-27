@@ -62,6 +62,9 @@ NOTIONAL = float(env("NOTIONAL", "500"))  # dollars per leg
 MAX_LEGS = int(env("MAX_LEGS", "4"))      # the video showed up to 4
 GRID_STEP_PCT = float(env("GRID_STEP_PCT", "0.05"))   # add a leg after this % against
 TAKE_PROFIT_PCT = float(env("TAKE_PROFIT_PCT", "0.08"))  # each leg's own target, %
+STOP_LOSS_PCT = float(env("STOP_LOSS_PCT", "0.08"))   # each leg's own stop. 0 = none (the video).
+                                                      # With a stop every leg closes, so the win
+                                                      # rate on the dashboard is a real number.
 BASKET_STOP_PCT = float(env("BASKET_STOP_PCT", "0"))  # 0 = no stop, as filmed
 BASKET_TP_PCT = float(env("BASKET_TP_PCT", "0"))      # 0 = legs close individually
 POLL_SECONDS = float(env("POLL_SECONDS", "3"))
@@ -244,6 +247,14 @@ def buying_power():
 _warned = {"short": False}
 
 
+def leg_stop(side, entry):
+    """Each leg's own stop. Without one a losing leg never closes, the win rate counts
+    only winners, and the damage hides in the open stack. That is the video's trick."""
+    if STOP_LOSS_PCT <= 0:
+        return None
+    return entry * (1 - STOP_LOSS_PCT / 100) if side == "buy" else entry * (1 + STOP_LOSS_PCT / 100)
+
+
 def resolve_side(side):
     """Alpaca has no short selling in crypto. A sell there can only close what you hold,
     so a crypto grid is long only. Stocks and ETFs can be shorted on a margin account."""
@@ -305,14 +316,20 @@ def main():
             still = []
             for leg in legs:
                 px = bid if leg["side"] == "buy" else ask
-                hit = px >= leg["tp"] if leg["side"] == "buy" else px <= leg["tp"]
-                if hit:
-                    gain = (px - leg["entry"]) * leg["qty"] * (1 if leg["side"] == "buy" else -1)
-                    realized += gain
-                    wins += 1
+                up = leg["side"] == "buy"
+                won = px >= leg["tp"] if up else px <= leg["tp"]
+                lost = bool(leg.get("sl")) and (px <= leg["sl"] if up else px >= leg["sl"])
+                if won or lost:
+                    gain = (px - leg["entry"]) * leg["qty"] * (1 if up else -1)
                     try:
-                        submit("sell" if leg["side"] == "buy" else "buy", leg["qty"])
-                        log(f"  TP leg {leg['n']} @ {px:.2f}  +${gain:.2f}   (total ${realized:+.2f})")
+                        submit("sell" if up else "buy", leg["qty"])
+                        realized += gain
+                        if won:
+                            wins += 1
+                        else:
+                            losses += 1
+                        log(f"  {'TP' if won else 'SL'} leg {leg['n']} @ {px:.2f}  "
+                            f"${gain:+.2f}   (total ${realized:+.2f})")
                     except Exception as e:
                         log(f"  leg {leg['n']} close failed: {e}")
                         still.append(leg)
@@ -334,10 +351,11 @@ def main():
                 entry = ask if side == "buy" else bid
                 qty = size_for(entry)
                 tp = entry * (1 + TAKE_PROFIT_PCT / 100) if side == "buy" else entry * (1 - TAKE_PROFIT_PCT / 100)
+                sl = leg_stop(side, entry)
                 submit(side, qty)
                 opened += 1
-                legs.append({"side": side, "entry": entry, "qty": qty, "tp": tp, "n": opened})
-                log(f"OPEN leg 1 {side} {qty} @ {entry:.2f}  tp {tp:.2f}")
+                legs.append({"side": side, "entry": entry, "qty": qty, "tp": tp, "sl": sl, "n": opened})
+                log(f"OPEN leg 1 {side} {qty} @ {entry:.2f}  tp {tp:.2f}  sl {sl if sl else 'none'}")
 
             # ---- add a leg when price goes against the last one (this is the grid)
             elif len(legs) < MAX_LEGS:
@@ -349,9 +367,10 @@ def main():
                     entry = ask if side == "buy" else bid
                     qty = size_for(entry)
                     tp = entry * (1 + TAKE_PROFIT_PCT / 100) if side == "buy" else entry * (1 - TAKE_PROFIT_PCT / 100)
+                    sl = leg_stop(side, entry)
                     submit(side, qty)
                     opened += 1
-                    legs.append({"side": side, "entry": entry, "qty": qty, "tp": tp, "n": opened})
+                    legs.append({"side": side, "entry": entry, "qty": qty, "tp": tp, "sl": sl, "n": opened})
                     log(f"ADD leg {len(legs)} {side} {qty} @ {entry:.2f}  "
                         f"(price {against:.2f}% against leg {last['n']})")
 
@@ -393,11 +412,11 @@ def main():
                     "drawdown_pct": round(100.0 * (acct_start - eq_now) / acct_start, 2) if acct_start else 0.0,
                     "basket_stop_pct": BASKET_STOP_PCT,
                     "notional": NOTIONAL, "grid_step_pct": GRID_STEP_PCT,
-                    "take_profit_pct": TAKE_PROFIT_PCT, "direction": DIRECTION,
+                    "take_profit_pct": TAKE_PROFIT_PCT, "stop_loss_pct": STOP_LOSS_PCT, "direction": DIRECTION,
                     "seconds_left": int(max(0, deadline - time.time())),
                     "legs": [{
                         "n": l["n"], "side": l["side"], "entry": round(l["entry"], 2),
-                        "tp": round(l["tp"], 2), "qty": l["qty"],
+                        "tp": round(l["tp"], 2), "sl": round(l["sl"], 2) if l.get("sl") else None, "qty": l["qty"],
                         "pnl": round((( bid if l["side"] == "buy" else ask) - l["entry"])
                                      * l["qty"] * (1 if l["side"] == "buy" else -1), 2),
                         "pct": round((((bid if l["side"] == "buy" else ask) - l["entry"])
@@ -457,9 +476,12 @@ def main():
     except Exception:
         pass
     log("-" * 60)
-    log(f"session over. closed {wins} legs in profit, {losses} basket stops.")
+    log(f"session over. {wins} legs closed in profit, {losses} closed at a loss"
+        + (f" (real win rate {100.0*wins/(wins+losses):.1f}%)" if wins+losses else ""))
     log(f"realized ${realized:+.2f} | still open: {len(legs)} legs worth ${floating:+.2f}")
-    log("Open legs stay open - that is what the bot in the video does too.")
+    if legs:
+        log("Open legs stay open. With STOP_LOSS_PCT=0 they can only ever close in profit,\n"
+            "           which is what makes the video's win rate meaningless.")
     return 0
 
 

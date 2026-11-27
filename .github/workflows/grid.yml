@@ -25,6 +25,9 @@ on:
       take_profit_pct:
         description: "each leg's own take profit, %"
         default: "0.08"
+      stop_loss_pct:
+        description: "each leg's own stop %. 0 = none (the video). Non-zero makes the win rate real"
+        default: "0.08"
       basket_stop_pct:
         description: "whole-stack stop as % of equity. 0 = none, like the video"
         default: "0"
@@ -59,6 +62,7 @@ jobs:
       MAX_LEGS: ${{ github.event.inputs.max_legs || '4' }}
       GRID_STEP_PCT: ${{ github.event.inputs.grid_step_pct || '0.05' }}
       TAKE_PROFIT_PCT: ${{ github.event.inputs.take_profit_pct || '0.08' }}
+      STOP_LOSS_PCT: ${{ github.event.inputs.stop_loss_pct || '0.08' }}
       BASKET_STOP_PCT: ${{ github.event.inputs.basket_stop_pct || '0' }}
       RUN_MINUTES: ${{ github.event.inputs.run_minutes || '330' }}
     steps:
