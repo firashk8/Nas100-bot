@@ -404,7 +404,9 @@ def main():
                     "symbol": SYMBOL, "price": round(mid, 2), "bid": round(bid, 2), "ask": round(ask, 2),
                     "open_legs": len(legs), "max_legs": MAX_LEGS,
                     "floating": round(floating, 2), "realized": round(realized, 2),
-                    "net": round(realized + floating, 2),
+                    "net": round(eq_now - acct_start, 2),          # the truth: real account change
+                    "net_tally": round(realized + floating, 2),    # what my own bookkeeping thinks
+                    "fees_and_slippage": round((realized + floating) - (eq_now - acct_start), 2),
                     "worst_leg_pct": round(worst, 3),
                     "wins": wins, "losses": losses, "legs_opened": opened,
                     "win_rate": round(100.0 * wins / opened, 1) if opened else 0.0,

@@ -107,10 +107,12 @@
     <div class="state" id="state">NOT CONNECTED</div>
     <div class="sym" id="sym">add your GitHub token in settings</div>
     <div class="big num" id="net">—</div>
-    <div class="cap">net profit and loss</div>
+    <div class="cap">real account change</div>
     <div class="split">
       <div class="mini"><div class="k">Closed</div><div class="v num ok" id="realized">—</div></div>
       <div class="mini"><div class="k">Still open</div><div class="v num" id="floating">—</div></div>
+      <div class="mini"><div class="k">Bot thinks it made</div><div class="v num" id="tally">—</div></div>
+      <div class="mini"><div class="k">Eaten by fees</div><div class="v num bad" id="fees">—</div></div>
     </div>
     <svg class="spark" id="spark" viewBox="0 0 300 46" preserveAspectRatio="none"></svg>
   </section>
@@ -140,7 +142,8 @@
     <div class="row"><span>Legs closed in profit</span><b class="num ok" id="sWins">—</b></div>
     <div class="row"><span>Legs closed at a loss</span><b class="num bad" id="sLoss">—</b></div>
     <div class="row"><span>Legs opened</span><b class="num" id="sOpened">—</b></div>
-    <div class="row"><span>Equity</span><b class="num" id="sEq">—</b></div>
+    <div class="row"><span>Equity now</span><b class="num" id="sEq">—</b></div>
+    <div class="row"><span>Equity at start</span><b class="num" id="sEq0">—</b></div>
     <div class="row"><span>Price</span><b class="num" id="sPx">—</b></div>
     <div class="row"><span>Time left this session</span><b class="num" id="sLeft">—</b></div>
     <div class="note">A high win rate here is not the same as making money. On 16,662 real BTC
@@ -299,13 +302,16 @@ function paint(){
   if (noTok) $("ctlNote").textContent =
     "Add a GitHub token in settings to use these buttons. Until then start and stop the bot from the repo's Actions tab.";
 
-  const net = S.net ?? 0;
+  const net = S.net ?? 0;                    // real equity change, not my bookkeeping
   $("net").textContent = money(net);
   $("net").style.color = net > 0 ? "var(--green)" : net < 0 ? "var(--red)" : "var(--text)";
   $("realized").textContent = money(S.realized ?? 0);
   $("realized").style.color = (S.realized ?? 0) >= 0 ? "var(--green)" : "var(--red)";
   $("floating").textContent = money(S.floating ?? 0);
   $("floating").style.color = (S.floating ?? 0) >= 0 ? "var(--green)" : "var(--red)";
+  $("tally").textContent = money(S.net_tally ?? 0);
+  $("tally").style.color = "var(--dim)";
+  $("fees").textContent = money(-(S.fees_and_slippage ?? 0));
 
   // risk
   const fl = S.floating ?? 0;
@@ -349,6 +355,7 @@ function paint(){
   $("sWin").style.color = (S.stop_loss_pct ?? 0) > 0 ? "var(--gold)" : "var(--dim)";
   $("sOpened").textContent = `${S.legs_opened ?? 0}`;
   $("sEq").textContent = plain(S.equity ?? 0);
+  $("sEq0").textContent = plain(S.start_equity ?? 0);
   $("sPx").textContent = (S.price ?? 0).toLocaleString();
   const sec = S.seconds_left ?? 0;
   $("sLeft").textContent = dead ? "—" : `${Math.floor(sec/3600)}h ${Math.floor(sec%3600/60)}m`;
