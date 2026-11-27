@@ -41,7 +41,7 @@ permissions:
 
 concurrency:
   group: grid-bot
-  cancel-in-progress: false
+  cancel-in-progress: true   # pressing START again replaces the running bot instead of queueing behind it
 
 jobs:
   grid:

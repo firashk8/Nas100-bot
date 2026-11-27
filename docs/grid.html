@@ -266,9 +266,22 @@ function stale(){
 /* ---------------- paint ---------------- */
 function paint(){
   if (!S){ $("state").textContent = TOKEN ? "STOPPED" : "NOT CONNECTED"; return; }
+  const err  = S.state === "ERROR" && !stale();
   const dead = stale() || S.state === "STOPPED";
-  $("state").textContent = dead ? "STOPPED" : "RUNNING";
-  $("state").style.color = dead ? "var(--muted)" : "var(--green)";
+  $("state").textContent = err ? "ERROR" : dead ? "STOPPED" : "RUNNING";
+  $("state").style.color = err ? "var(--red)" : dead ? "var(--muted)" : "var(--green)";
+  if (err){
+    const age0 = Math.round((Date.now() - new Date(S.time).getTime())/1000);
+    $("sym").textContent = S.error || "the bot hit an error";
+    $("sym").style.color = "var(--red)";
+    $("net").textContent = "—"; $("net").style.color = "var(--muted)";
+    $("realized").textContent = money(S.realized ?? 0);
+    $("floating").textContent = "—";
+    $("legs").innerHTML = `<div class="empty">Stopped by an error ${age0}s ago.</div>`;
+    $("ctlNote").textContent = "Fix the setting the message names, then press START again.";
+    return;
+  }
+  $("sym").style.color = "var(--muted)";
   const age = Math.round((Date.now() - new Date(S.time).getTime())/1000);
   $("sym").textContent = `${S.symbol} · ${S.direction} · updated ${age}s ago`
                        + (S._raw ? " · read-only, may lag" : "");

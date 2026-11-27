@@ -236,6 +236,26 @@ def size_for(px):
     return round(qty, 6) if IS_CRYPTO else max(1, int(qty))
 
 
+def buying_power():
+    a = call("GET", f"{TRADE_HOST}/v2/account")
+    return float(a.get("non_marginable_buying_power") if IS_CRYPTO else a.get("buying_power", 0))
+
+
+_warned = {"short": False}
+
+
+def resolve_side(side):
+    """Alpaca has no short selling in crypto. A sell there can only close what you hold,
+    so a crypto grid is long only. Stocks and ETFs can be shorted on a margin account."""
+    if IS_CRYPTO and side == "sell":
+        if not _warned["short"]:
+            _warned["short"] = True
+            log("NOTE: crypto cannot be shorted on Alpaca - this grid will trade long only. "
+                "Use GLD, IAU or QQQ in US hours if you want it to short too.")
+        return "buy"
+    return side
+
+
 def close_everything(legs, reason):
     if not legs:
         return
@@ -270,6 +290,7 @@ def main():
     opened = 0
     deadline = time.time() + RUN_MINUTES * 60
     last_status = 0.0
+    last_err = 0.0
 
     while time.time() < deadline:
         try:
@@ -305,6 +326,11 @@ def main():
                 if DIRECTION == "momentum":
                     c = recent_closes(10)
                     side = "buy" if len(c) >= 3 and c[-1] >= c[0] else "sell"
+                side = resolve_side(side)
+                if buying_power() < NOTIONAL:
+                    raise RuntimeError(
+                        f"not enough buying power for a ${NOTIONAL:,.0f} leg "
+                        f"(have ${buying_power():,.2f}). Lower '$ per leg' in the dashboard.")
                 entry = ask if side == "buy" else bid
                 qty = size_for(entry)
                 tp = entry * (1 + TAKE_PROFIT_PCT / 100) if side == "buy" else entry * (1 - TAKE_PROFIT_PCT / 100)
@@ -318,7 +344,7 @@ def main():
                 last = legs[-1]
                 against = (last["entry"] - mid) / last["entry"] * 100 if last["side"] == "buy" \
                     else (mid - last["entry"]) / last["entry"] * 100
-                if against >= GRID_STEP_PCT:
+                if against >= GRID_STEP_PCT and buying_power() >= NOTIONAL:
                     side = last["side"]
                     entry = ask if side == "buy" else bid
                     qty = size_for(entry)
@@ -403,6 +429,23 @@ def main():
             break
         except Exception as e:
             log(f"error: {e}")
+            # Put the failure on the dashboard instead of leaving it frozen and silent.
+            if time.time() - last_err > 45:
+                last_err = time.time()
+                publish({
+                    "time": datetime.now(timezone.utc).isoformat(),
+                    "state": "ERROR", "error": str(e)[:400],
+                    "symbol": SYMBOL, "direction": DIRECTION,
+                    "notional": NOTIONAL, "max_legs": MAX_LEGS,
+                    "open_legs": len(legs), "floating": 0.0, "realized": round(realized, 2),
+                    "net": round(realized, 2), "worst_leg_pct": 0.0,
+                    "wins": wins, "losses": losses, "legs_opened": opened,
+                    "win_rate": round(100.0 * wins / opened, 1) if opened else 0.0,
+                    "equity": acct_start, "start_equity": acct_start,
+                    "drawdown_pct": 0.0, "basket_stop_pct": BASKET_STOP_PCT,
+                    "grid_step_pct": GRID_STEP_PCT, "take_profit_pct": TAKE_PROFIT_PCT,
+                    "seconds_left": int(max(0, deadline - time.time())), "legs": [],
+                })
             time.sleep(10)
 
     floating = 0.0
