@@ -1,29 +1,29 @@
 {
- "time": "2026-11-27T05:58:58.744439+00:00",
+ "time": "2026-11-27T05:59:30.598388+00:00",
  "state": "RUNNING",
  "symbol": "BTC/USD",
- "price": 61629.79,
- "bid": 61623.85,
- "ask": 61635.72,
+ "price": 61686.33,
+ "bid": 61679.67,
+ "ask": 61693.0,
  "open_legs": 1,
  "max_legs": 5,
- "floating": 59.56,
- "realized": 129308.23,
- "net": 129367.79,
- "worst_leg_pct": 0.596,
- "wins": 3433,
+ "floating": 68.67,
+ "realized": 129881.55,
+ "net": 129950.22,
+ "worst_leg_pct": 0.687,
+ "wins": 3442,
  "losses": 0,
  "legs_opened": 37,
- "win_rate": 9278.4,
- "equity": 98405.25,
+ "win_rate": 9302.7,
+ "equity": 98397.89,
  "start_equity": 99989.33,
- "drawdown_pct": 1.58,
+ "drawdown_pct": 1.59,
  "basket_stop_pct": 0.0,
  "notional": 10000.0,
  "grid_step_pct": 0.05,
  "take_profit_pct": 0.08,
  "direction": "momentum",
- "seconds_left": 423,
+ "seconds_left": 391,
  "legs": [
   {
    "n": 26,
@@ -31,8 +31,8 @@
    "entry": 61259.01,
    "tp": 61308.02,
    "qty": 0.163241,
-   "pnl": 59.56,
-   "pct": 0.596
+   "pnl": 68.67,
+   "pct": 0.687
   }
  ]
 }
