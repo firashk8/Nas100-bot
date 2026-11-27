@@ -1,0 +1,83 @@
+name: Reversal scanner
+
+# The only strategy in this repo that survived honest testing.
+# Two short jobs a day, about a minute each. Nothing runs intraday.
+#
+#   22:30 UTC (17:30 ET) - scan: find symbols that closed 1.5% below their open,
+#                          queue buy-on-open orders for the next session
+#   14:50 UTC (09:50 ET) - exit: queue sell-on-close for whatever actually filled
+#
+# Alpaca queues OPG orders placed after 19:00 ET to the next opening auction, and
+# CLS orders to the next closing auction, so both fill at the official auction price.
+# Nothing here reads intraday price, which is why delayed free data costs nothing.
+
+on:
+  schedule:
+    - cron: "30 22 * * 1-5"   # scan, after the US close
+    - cron: "50 14 * * 1-5"   # exit, just after the US open
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "scan (queue buys), exit (queue sells), report (look only)"
+        default: "report"
+      drop_pct:
+        description: "trigger: close this % below the open. 1.5 tested best"
+        default: "1.5"
+      risk_pct:
+        description: "% of equity per signal"
+        default: "10"
+      max_positions:
+        description: "most signals to take in one day"
+        default: "5"
+      dry_run:
+        description: "true = place no orders, just show what it would do"
+        default: "false"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: reversal-bot
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ALPACA_KEY: ${{ secrets.ALPACA_KEY }}
+      ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+      ALPACA_PAPER: "true"
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      DROP_PCT: ${{ github.event.inputs.drop_pct || '1.5' }}
+      RISK_PCT: ${{ github.event.inputs.risk_pct || '10' }}
+      MAX_POSITIONS: ${{ github.event.inputs.max_positions || '5' }}
+      DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Pick the mode
+        id: m
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            if [ "${{ github.event.schedule }}" = "30 22 * * 1-5" ]; then
+              echo "mode=scan" >> $GITHUB_OUTPUT
+            else
+              echo "mode=exit" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "mode=${{ github.event.inputs.mode || 'report' }}" >> $GITHUB_OUTPUT
+          fi
+      - name: Run the reversal scanner
+        env:
+          MODE: ${{ steps.m.outputs.mode }}
+        run: python3 reversal_bot.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reversal-status
+          path: reversal_status.json
+          if-no-files-found: ignore

@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a1230">
+<title>Reversal Scanner</title>
+<style>
+  :root{--bg:#05070f;--card:#0c1226;--card2:#0f1730;--line:#1b2547;--text:#e8edff;
+        --muted:#7d89b3;--dim:#4d5881;--green:#2ee59d;--red:#ff3d6e;--cyan:#22e3d3;--gold:#e8c86a}
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  body{background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding-bottom:44px}
+  .num{font-variant-numeric:tabular-nums}
+  header{position:sticky;top:0;z-index:20;backdrop-filter:blur(14px);
+    background:linear-gradient(180deg,rgba(16,28,78,.96),rgba(10,18,48,.92));
+    padding:calc(env(safe-area-inset-top) + 13px) 16px 13px;display:flex;align-items:center;gap:11px;border-bottom:1px solid #1d2b66}
+  header h1{font-size:17px;font-weight:650}
+  header small{display:block;color:var(--muted);font-size:11.5px;margin-top:1px}
+  .sp{flex:1}
+  .icon{background:none;border:0;color:var(--text);font-size:19px;padding:7px;border-radius:9px}
+  main{padding:14px;display:grid;gap:13px;max-width:560px;margin:0 auto}
+  .card{background:linear-gradient(180deg,var(--card2),var(--card));border:1px solid var(--line);border-radius:17px;padding:15px}
+  .ttl{font-size:11px;letter-spacing:1.3px;text-transform:uppercase;color:var(--muted);font-weight:650;display:flex;gap:7px;align-items:center;margin-bottom:11px}
+  .pill{font-size:10.5px;font-weight:750;letter-spacing:.9px;padding:4px 9px;border-radius:999px;border:1px solid currentColor;text-transform:uppercase}
+  .ok{color:var(--green)}.bad{color:var(--red)}.wait{color:var(--muted)}
+  .hero{text-align:center;padding:18px 15px}
+  .hero .st{font-size:25px;font-weight:800;letter-spacing:.8px}
+  .big{font-size:40px;font-weight:800;letter-spacing:-1.1px;margin:11px 0 2px}
+  .cap{font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);font-weight:650}
+  .row{display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid rgba(27,37,71,.6);font-size:14px}
+  .row:last-child{border-bottom:0}
+  .row span:first-child{color:var(--muted)}
+  .row b{font-weight:650}
+  .sig{display:grid;grid-template-columns:1fr auto;gap:10px;padding:11px 0;border-bottom:1px solid rgba(27,37,71,.6)}
+  .sig:last-child{border-bottom:0}
+  .sig .s{font-size:16px;font-weight:700}
+  .sig .m{font-size:11.5px;color:var(--dim);margin-top:2px}
+  .sig .v{text-align:right;font-weight:750;font-size:16px}
+  .sig .vv{text-align:right;font-size:11.5px;color:var(--dim);margin-top:2px}
+  .empty{text-align:center;color:var(--dim);font-size:13px;padding:20px 8px}
+  .btns{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  button.act{border:0;border-radius:13px;padding:14px;font-size:14px;font-weight:700;color:#04101e}
+  button.act:disabled{opacity:.35}
+  .b1{background:linear-gradient(135deg,#2ee59d,#22e3d3)}
+  .b2{background:#18224a;color:var(--text);border:1px solid #27356e}
+  .wide{grid-column:1/-1}
+  .note{font-size:12px;color:var(--dim);margin-top:11px;line-height:1.5}
+  .sheet{position:fixed;inset:0;z-index:40;background:rgba(2,4,12,.72);backdrop-filter:blur(5px);display:none;align-items:flex-end}
+  .sheet.show{display:flex}
+  .sheet .in{background:var(--card);border-radius:22px 22px 0 0;border-top:1px solid var(--line);
+    padding:20px 17px calc(env(safe-area-inset-bottom) + 22px);width:100%;max-width:560px;margin:0 auto;max-height:90vh;overflow:auto}
+  .f{margin:13px 0}
+  .f label{display:block;font-size:11px;letter-spacing:.9px;text-transform:uppercase;color:var(--muted);font-weight:650;margin-bottom:6px}
+  .f input{width:100%;background:#070b18;border:1px solid var(--line);border-radius:11px;padding:13px;color:var(--text);font-size:15px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  td{padding:6px 0;border-bottom:1px solid rgba(27,37,71,.5)}
+  td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+
+<header>
+  <div><h1>Reversal Scanner</h1><small id="rl">—</small></div>
+  <div class="sp"></div>
+  <button class="icon" id="bR">⟳</button>
+  <button class="icon" id="bS">⚙</button>
+</header>
+
+<main>
+  <section class="card hero">
+    <div class="st" id="state">NOT CONNECTED</div>
+    <div class="cap" id="sub" style="margin-top:5px">waiting for the first run</div>
+    <div class="big num" id="eq">—</div>
+    <div class="cap">account equity</div>
+  </section>
+
+  <section class="card">
+    <div class="ttl">Signals <span class="sp"></span><span class="pill wait" id="sp">—</span></div>
+    <div id="sigs"><div class="empty">No symbol dropped enough yesterday.</div></div>
+    <div class="note" id="sn">Triggers when a symbol closes 1.5% or more below its own open.
+      Entry is the next opening auction, exit the next closing auction. Flat overnight.</div>
+  </section>
+
+  <section class="card">
+    <div class="ttl">Open positions <span class="sp"></span><span class="pill wait" id="pp">0</span></div>
+    <div id="pos"><div class="empty">Flat.</div></div>
+  </section>
+
+  <section class="card">
+    <div class="ttl">Schedule</div>
+    <div class="row"><span>Next market open</span><b class="num" id="no">—</b></div>
+    <div class="row"><span>Next market close</span><b class="num" id="nc">—</b></div>
+    <div class="row"><span>Symbols watched</span><b class="num" id="uni">—</b></div>
+    <div class="row"><span>Last run</span><b class="num" id="lr">—</b></div>
+    <div class="note">Two jobs a day, about a minute each: 17:30 New York queues the buys,
+      09:50 New York queues the sells. Nothing runs during the session — there is nothing
+      for it to react to.</div>
+  </section>
+
+  <section class="card">
+    <div class="ttl">What this was measured at</div>
+    <table>
+      <tr><td>QQQ · 754 trades · 27.6 years</td><td>55.0% win · 5.30×</td></tr>
+      <tr><td>IWM · 663 trades · 26.4 years</td><td>55.2% win · 3.04×</td></tr>
+      <tr><td>SPY · 493 trades · 20 years</td><td>54.3% win · 2.42×</td></tr>
+      <tr><td>Worst drawdown</td><td>29.2%</td></tr>
+      <tr><td>Cost charged per round trip</td><td>2 bps</td></tr>
+    </table>
+    <div class="note">Both halves of every window were positive. This is a real edge and a
+      small one — roughly 25 bps a trade, about 27 trades a year per symbol. Watching 30
+      symbols is what turns that into a few signals a day, at full strength rather than
+      diluted. Loosening the trigger to 1% roughly halves it.</div>
+  </section>
+
+  <section class="card">
+    <div class="ttl">Run it now</div>
+    <div class="btns">
+      <button class="act b1" id="bScan">SCAN</button>
+      <button class="act b2" id="bExit">EXIT ALL</button>
+      <button class="act b2 wide" id="bRep">REPORT ONLY (no orders)</button>
+    </div>
+    <div class="note" id="cn">The schedule handles this by itself. These are for checking it works.</div>
+  </section>
+</main>
+
+<div class="sheet" id="sh"><div class="in">
+  <div class="ttl">Settings</div>
+  <div class="f"><label>Repository</label><input id="iR" autocapitalize="off" spellcheck="false"></div>
+  <div class="f"><label>GitHub token (Actions + Contents, read & write)</label>
+    <input id="iT" type="password" autocapitalize="off" spellcheck="false"></div>
+  <div class="f"><label>Drop % to trigger (1.5 tested best)</label><input id="iD" type="number" step="0.1" value="1.5"></div>
+  <div class="f"><label>% of equity per signal</label><input id="iK" type="number" value="10"></div>
+  <div class="f"><label>Max signals per day</label><input id="iM" type="number" value="5"></div>
+  <button class="act b1 wide" id="bSave">SAVE</button>
+</div></div>
+
+<script>
+const mem={}, S0={get:k=>{try{return localStorage.getItem(k)||""}catch(e){return mem[k]||""}},
+                 set:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){mem[k]=v}}};
+const $=i=>document.getElementById(i);
+const money=v=>(v<0?"-":"+")+"$"+Math.abs(v).toFixed(2);
+let REPO=S0.get("rrepo")||"firashk8/Nas100-bot", TOK=S0.get("rtok");
+let CFG=JSON.parse(S0.get("rcfg")||"{}"), S=null, busy=false;
+
+async function gh(m,p,b,a){
+  if(!TOK) throw new Error("no token");
+  const r=await fetch(`https://api.github.com/repos/${REPO}${p}`,{method:m,
+    headers:{"Authorization":"Bearer "+TOK,"Accept":a||"application/vnd.github+json",
+             "X-GitHub-Api-Version":"2022-11-28"},body:b?JSON.stringify(b):undefined});
+  if(r.status===204)return{};
+  if(!r.ok)throw new Error(r.status+" "+(await r.text()).slice(0,120));
+  const t=await r.text(); return t?JSON.parse(t):{};
+}
+async function load(){
+  if(TOK){ try{ S=await gh("GET","/contents/reversal_status.json?ref=status&t="+Date.now(),
+      null,"application/vnd.github.raw+json"); return;}catch(e){S=null;} }
+  try{ const r=await fetch(`https://raw.githubusercontent.com/${REPO}/status/reversal_status.json?t=`+Date.now(),{cache:"no-store"});
+       if(!r.ok)throw 0; S=await r.json(); S._raw=true; }catch(e){ S=null; }
+}
+function fmt(t){ if(!t)return "—"; const d=new Date(t);
+  return d.toLocaleString(undefined,{weekday:"short",hour:"2-digit",minute:"2-digit"}); }
+
+function paint(){
+  $("rl").textContent=REPO;
+  const noTok=!TOK;
+  ["bScan","bExit","bRep"].forEach(b=>$(b).disabled=noTok);
+  if(noTok)$("cn").textContent="Add a GitHub token in settings to run it by hand. The schedule works regardless.";
+  if(!S){ $("state").textContent=TOK?"NO RUNS YET":"NOT CONNECTED"; return; }
+  const age=Math.round((Date.now()-new Date(S.time).getTime())/1000);
+  $("state").textContent=S.market_open?"MARKET OPEN":"MARKET CLOSED";
+  $("state").style.color=S.market_open?"var(--green)":"var(--muted)";
+  $("sub").textContent=`last run: ${S.mode} · ${age<3600?age+"s":Math.round(age/3600)+"h"} ago`
+                      +(S._raw?" · read-only":"");
+  $("eq").textContent="$"+Number(S.equity||0).toLocaleString(undefined,{minimumFractionDigits:2});
+
+  const sg=S.signals||[], q=(S.queued||[]).map(x=>x.symbol);
+  $("sp").textContent=sg.length; $("sp").className="pill "+(sg.length?"ok":"wait");
+  $("sigs").innerHTML=sg.length?sg.map(x=>`<div class="sig">
+      <div><div class="s">${x.symbol}</div><div class="m">${x.date} · open ${x.open} → close ${x.close}${q.includes(x.symbol)?" · <span style='color:var(--cyan)'>buy queued</span>":""}</div></div>
+      <div><div class="v" style="color:var(--red)">${x.drop_pct}%</div><div class="vv">below open</div></div>
+    </div>`).join(""):'<div class="empty">No symbol dropped enough yesterday.</div>';
+
+  const ps=S.open_positions||[];
+  $("pp").textContent=ps.length; $("pp").className="pill "+(ps.length?"ok":"wait");
+  $("pos").innerHTML=ps.length?ps.map(p=>`<div class="sig">
+      <div><div class="s">${p.symbol}</div><div class="m">${p.qty} @ ${p.entry} · now ${p.price}</div></div>
+      <div><div class="v" style="color:${p.pnl>=0?'var(--green)':'var(--red)'}">${money(p.pnl)}</div>
+           <div class="vv">${p.pct>=0?'+':''}${p.pct}%</div></div>
+    </div>`).join(""):'<div class="empty">Flat.</div>';
+
+  $("no").textContent=fmt(S.next_open); $("nc").textContent=fmt(S.next_close);
+  $("uni").textContent=S.universe||"—";
+  $("lr").textContent=fmt(S.time);
+  $("sn").textContent=`Triggers when a symbol closes ${S.drop_pct}% or more below its own open. `
+    +`Takes at most ${S.max_positions} a day at ${S.risk_pct}% of equity each. Flat overnight.`;
+}
+
+async function run(mode){
+  if(busy)return; busy=true;
+  const n=$("cn"), old=n.textContent; n.textContent=mode+" requested…";
+  try{
+    const repo=await gh("GET","");
+    await gh("POST","/actions/workflows/reversal.yml/dispatches",{ref:repo.default_branch,
+      inputs:{mode:mode, drop_pct:String(CFG.d??1.5), risk_pct:String(CFG.k??10),
+              max_positions:String(CFG.m??5), dry_run:"false"}});
+    n.textContent=mode+" started. Refresh in a minute.";
+  }catch(e){ n.textContent="Failed: "+e.message.slice(0,110); }
+  busy=false; setTimeout(()=>{n.textContent=old},8000);
+}
+$("bScan").onclick=()=>run("scan");
+$("bExit").onclick=()=>run("exit");
+$("bRep").onclick=()=>run("report");
+$("bR").onclick=()=>tick();
+$("bS").onclick=()=>{ $("iR").value=REPO; $("iT").value=TOK; $("iD").value=CFG.d??1.5;
+  $("iK").value=CFG.k??10; $("iM").value=CFG.m??5; $("sh").classList.add("show"); };
+$("sh").onclick=e=>{ if(e.target.id==="sh")$("sh").classList.remove("show"); };
+$("bSave").onclick=()=>{
+  REPO=$("iR").value.trim()||REPO; TOK=$("iT").value.trim();
+  CFG={d:+$("iD").value,k:+$("iK").value,m:+$("iM").value};
+  S0.set("rrepo",REPO); S0.set("rtok",TOK); S0.set("rcfg",JSON.stringify(CFG));
+  $("sh").classList.remove("show"); tick();
+};
+async function tick(){ await load(); paint(); }
+tick(); setInterval(tick,60000);
+</script>
+</body>
+</html>
