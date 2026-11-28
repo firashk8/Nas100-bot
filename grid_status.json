@@ -1,10 +1,10 @@
 {
- "time": "2026-11-28T02:20:54.270780+00:00",
+ "time": "2026-11-28T02:21:24.419591+00:00",
  "state": "RUNNING",
  "symbol": "BTC/USD",
- "price": 60092.8,
- "bid": 60088.1,
- "ask": 60097.5,
+ "price": 60095.57,
+ "bid": 60088.42,
+ "ask": 60102.73,
  "open_legs": 1,
  "max_legs": 4,
  "floating": -0.07,
@@ -27,7 +27,7 @@
  "take_profit_pct": 0.08,
  "stop_loss_pct": 0.08,
  "direction": "momentum",
- "seconds_left": 7380,
+ "seconds_left": 7350,
  "legs": [
   {
    "n": 45,
